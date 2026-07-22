@@ -1,26 +1,412 @@
-@import "tailwindcss";
-
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: light;
+  --page-width: 1280px;
+  --text: #111111;
+  --muted: #666666;
+  --line: #000000;
+  --paper: #ffffff;
+  --focus: #fff8a6;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+* {
+  box-sizing: border-box;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  background: var(--paper);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  margin: 0;
+  background: var(--paper);
+  color: var(--text);
+  font-family: Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.35;
+  -webkit-font-smoothing: auto;
+  text-rendering: auto;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button,
+select {
+  min-height: 1.9rem;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  color: var(--text);
+}
+
+button {
+  padding: 0.2rem 0.55rem;
+  background: #efefef;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: #e2e2e2;
+}
+
+button:active:not(:disabled) {
+  background: #d5d5d5;
+}
+
+button:disabled {
+  color: #777777;
+  cursor: default;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+summary:focus-visible {
+  outline: 2px solid #0000ee;
+  outline-offset: 2px;
+}
+
+select {
+  min-width: 3.5rem;
+  padding: 0.15rem 1.6rem 0.15rem 0.35rem;
+  background: var(--paper);
+}
+
+progress {
+  width: 100%;
+}
+
+::selection {
+  background: var(--focus);
+}
+
+.site-shell {
+  width: min(100%, var(--page-width));
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 0 1rem 3rem;
+}
+
+.site-header {
+  width: 100vw;
+  margin: 0 0 1.5rem calc(50% - 50vw);
+  border-bottom: 1px solid var(--line);
+}
+
+.site-header__inner {
+  display: flex;
+  width: min(100%, var(--page-width));
+  margin: 0 auto;
+  padding: 0.8rem 1rem;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.site-logo {
+  width: 2.5rem;
+  height: 2.5rem;
+  flex: 0 0 auto;
+  object-fit: contain;
+}
+
+.site-header__inner h1 {
+  margin: 0;
+  font-size: 1.65rem;
+  font-weight: 400;
+  line-height: 1.1;
+}
+
+.drop-zone {
+  min-height: 12rem;
+  margin: 0;
+  padding: 1rem;
+  border: 1px solid var(--line);
+}
+
+.drop-zone.is-dragging {
+  background: var(--focus);
+}
+
+.file-row,
+.parse-progress {
+  display: flex;
+  min-height: 9rem;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0.65rem;
+}
+
+.file-row span,
+.parse-progress span {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.parse-progress {
+  max-width: 32rem;
+}
+
+.message {
+  margin: 1rem 0;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+}
+
+.message summary {
+  cursor: pointer;
+}
+
+.message ul {
+  margin-bottom: 0;
+}
+
+.error-message {
+  border-left-width: 4px;
+}
+
+.report-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(12rem, 1fr);
+  align-items: flex-start;
+  gap: 2rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.report-metadata,
+.report-summary__counts {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+}
+
+.report-metadata div,
+.report-summary__counts div {
+  display: grid;
+  grid-template-columns: 5.75rem minmax(0, 1fr);
+  min-width: 0;
+  gap: 0.5rem;
+}
+
+.report-metadata dt {
+  font-weight: 700;
+}
+
+.report-metadata dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.report-summary__counts {
+  color: var(--muted);
+}
+
+.plot-group__details div {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.report-summary__counts dt,
+.plot-group__details dt {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.report-summary__counts dd,
+.plot-group__details dd {
+  margin: 0;
+}
+
+.report-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  margin: 1rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.toolbar-actions,
+.view-switcher {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.view-switcher {
+  margin: 0;
+}
+
+.toolbar-actions {
+  padding-bottom: 0.35rem;
+}
+
+.view-switcher button {
+  margin-bottom: -1px;
+  border-bottom-color: var(--line);
+  background: var(--paper);
+}
+
+.view-switcher button.is-active {
+  border-bottom-color: var(--paper);
+}
+
+.plot-groups {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.plot-group {
+  border-top: 1px solid var(--line);
+}
+
+.plot-group__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.3rem 1rem;
+  padding: 0.6rem 0;
+}
+
+.plot-group__header h2,
+.sample-section h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.plot-group__details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 1rem;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.plot-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.plot-grid figure {
+  min-width: 0;
+  margin: 0;
+  border: 1px solid var(--line);
+  background: var(--paper);
+}
+
+.plot-grid img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: contain;
+}
+
+.plot-grid figcaption {
+  min-width: 0;
+  padding: 0.4rem 0.5rem;
+  border-top: 1px solid var(--line);
+  font-size: 0.85rem;
+}
+
+.plot-grid figcaption dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.75rem;
+  min-width: 0;
+  margin: 0;
+}
+
+.plot-grid figcaption div {
+  display: flex;
+  min-width: 0;
+  gap: 0.25rem;
+}
+
+.plot-grid figcaption .plot-caption__sample {
+  width: 100%;
+}
+
+.plot-grid figcaption dt {
+  flex: 0 0 auto;
+  font-weight: 700;
+}
+
+.plot-grid figcaption dd {
+  min-width: 0;
+  margin: 0;
+}
+
+.plot-grid figcaption .plot-caption__sample dd {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plot-grid figcaption div:not(.plot-caption__sample) {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.sample-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.25rem 2rem;
+  margin: 0;
+  padding-left: 2rem;
+}
+
+.sample-list li {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .plot-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 680px) {
+  .site-header__inner h1 {
+    font-size: 1.4rem;
+  }
+
+  .report-summary {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+
+  .report-controls {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .toolbar-actions {
+    justify-content: flex-end;
+    padding-bottom: 0;
+  }
+
+  .plot-grid,
+  .sample-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 460px) {
+  .plot-grid,
+  .sample-list {
+    grid-template-columns: 1fr;
+  }
 }
