@@ -306,6 +306,7 @@ progress {
 
 .plot-image {
   position: relative;
+  padding: 0.75rem;
 }
 
 .plot-grid img {
