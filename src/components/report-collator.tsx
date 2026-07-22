@@ -5,6 +5,7 @@ import { Copy } from "lucide-react";
 import { type DragEvent, useEffect, useRef, useState } from "react";
 
 import { exportCollatedPdf } from "@/lib/export-collated-pdf";
+import { exportCollatedPowerpoint } from "@/lib/export-collated-powerpoint";
 import {
   parseNovoExpressReport,
   type ParsedReport,
@@ -25,6 +26,7 @@ const APP_BASE_PATH = (process.env.NEXT_PUBLIC_BASE_PATH ?? "").replace(
 );
 
 type ReportView = "groups" | "samples";
+type ExportFormat = "pdf" | "powerpoint";
 type CopyStatus = "copying" | "copied" | "error";
 
 type CopyFeedback = {
@@ -93,7 +95,7 @@ export function ReportCollator() {
   const [progress, setProgress] = useState<ParseProgress>(initialProgress);
   const [error, setError] = useState<string | null>(null);
   const [isParsing, setIsParsing] = useState(false);
-  const [isExporting, setIsExporting] = useState(false);
+  const [exportFormat, setExportFormat] = useState<ExportFormat | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [view, setView] = useState<ReportView>("groups");
   const [copyFeedback, setCopyFeedback] = useState<CopyFeedback | null>(null);
@@ -213,23 +215,29 @@ export function ReportCollator() {
     void processFile(event.dataTransfer.files[0]);
   }
 
-  async function handleExport() {
+  async function handleExport(format: ExportFormat) {
     if (!report) {
       return;
     }
 
-    setIsExporting(true);
+    setExportFormat(format);
     setError(null);
     try {
-      await exportCollatedPdf(report, PLOT_COLUMNS);
+      if (format === "pdf") {
+        await exportCollatedPdf(report, PLOT_COLUMNS);
+      } else {
+        await exportCollatedPowerpoint(report);
+      }
     } catch (cause) {
       setError(
         cause instanceof Error
           ? cause.message
-          : "The grouped PDF could not be generated.",
+          : `The grouped ${
+              format === "pdf" ? "PDF" : "PowerPoint"
+            } could not be generated.`,
       );
     } finally {
-      setIsExporting(false);
+      setExportFormat(null);
     }
   }
 
@@ -386,13 +394,21 @@ export function ReportCollator() {
               <button type="button" onClick={reset}>
                 New report
               </button>
-              <button
-                type="button"
-                onClick={() => void handleExport()}
-                disabled={isExporting}
+              <select
+                aria-label="Export report"
+                value=""
+                disabled={exportFormat !== null}
+                onChange={(event) => {
+                  const format = event.currentTarget.value as ExportFormat;
+                  void handleExport(format);
+                }}
               >
-                {isExporting ? "Exporting…" : "Export PDF"}
-              </button>
+                <option value="" disabled>
+                  {exportFormat ? "Exporting…" : "Export"}
+                </option>
+                <option value="pdf">Export as PDF</option>
+                <option value="powerpoint">Export as PowerPoint</option>
+              </select>
             </div>
           </section>
 
