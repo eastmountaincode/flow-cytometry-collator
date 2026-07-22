@@ -8,8 +8,7 @@ const appBasePath = (process.env.NEXT_PUBLIC_BASE_PATH ?? "").replace(
 
 export const metadata: Metadata = {
   title: "Flow cytometry report collator",
-  description:
-    "Group matching plots from flow cytometry PDF reports without uploading lab data.",
+  description: "Group matching plots from flow cytometry PDF reports.",
   icons: {
     icon: `${appBasePath}/favicon.ico`,
   },
