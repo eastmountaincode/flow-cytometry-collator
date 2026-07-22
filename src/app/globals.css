@@ -247,6 +247,10 @@ progress {
   padding-bottom: 0.35rem;
 }
 
+.toolbar-actions select:not(:disabled) {
+  cursor: pointer;
+}
+
 .view-switcher button {
   margin-bottom: -1px;
   border-bottom-color: var(--line);
@@ -331,11 +335,14 @@ progress {
 .plot-copy-button svg {
   width: 1rem;
   height: 1rem;
-  opacity: 0.55;
 }
 
-.plot-copy-button:hover:not(:disabled) svg,
-.plot-copy-button:focus-visible svg {
+.plot-copy-button:not(.has-label) {
+  opacity: 0.45;
+}
+
+.plot-copy-button:not(.has-label):hover,
+.plot-copy-button:not(.has-label):focus-visible {
   opacity: 1;
 }
 

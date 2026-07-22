@@ -27,7 +27,7 @@ const APP_BASE_PATH = (process.env.NEXT_PUBLIC_BASE_PATH ?? "").replace(
 
 type ReportView = "groups" | "samples";
 type ExportFormat = "pdf" | "powerpoint";
-type CopyStatus = "copying" | "copied" | "error";
+type CopyStatus = "copied" | "error";
 
 type CopyFeedback = {
   plotId: string;
@@ -117,6 +117,9 @@ export function ReportCollator() {
   }
 
   function showCopyResult(plotId: string, status: "copied" | "error") {
+    if (copyFeedbackTimeoutRef.current !== null) {
+      window.clearTimeout(copyFeedbackTimeoutRef.current);
+    }
     setCopyFeedback({ plotId, status });
     copyFeedbackTimeoutRef.current = window.setTimeout(
       () => {
@@ -242,12 +245,10 @@ export function ReportCollator() {
   }
 
   async function handleCopyPlot(plotId: string, imageUrl: string) {
-    clearCopyFeedback();
-    setCopyFeedback({ plotId, status: "copying" });
+    showCopyResult(plotId, "copied");
 
     try {
       await copyPlotImage(imageUrl);
-      showCopyResult(plotId, "copied");
     } catch {
       showCopyResult(plotId, "error");
     }
@@ -458,11 +459,9 @@ export function ReportCollator() {
                             }`}
                             aria-label={
                               copyFeedback?.plotId === plot.id
-                                ? copyFeedback.status === "copying"
-                                  ? `Copying ${group.label} plot for ${plot.sampleName}`
-                                  : copyFeedback.status === "copied"
-                                    ? `Copied ${group.label} plot for ${plot.sampleName}`
-                                    : `Copy failed for ${group.label} plot for ${plot.sampleName}`
+                                ? copyFeedback.status === "copied"
+                                  ? `Copied ${group.label} plot for ${plot.sampleName}`
+                                  : `Copy failed for ${group.label} plot for ${plot.sampleName}`
                                 : `Copy ${group.label} plot for ${plot.sampleName}`
                             }
                             title={
@@ -471,18 +470,15 @@ export function ReportCollator() {
                                 ? "Copy failed — right-click the image"
                                 : "Copy plot image"
                             }
-                            disabled={copyFeedback?.status === "copying"}
                             onClick={() =>
                               void handleCopyPlot(plot.id, plot.imageUrl)
                             }
                           >
                             {copyFeedback?.plotId === plot.id ? (
                               <span aria-live="polite">
-                                {copyFeedback.status === "copying"
-                                  ? "Copying…"
-                                  : copyFeedback.status === "copied"
-                                    ? "Copied"
-                                    : "Copy failed"}
+                                {copyFeedback.status === "copied"
+                                  ? "Copied"
+                                  : "Copy failed"}
                               </span>
                             ) : (
                               <Copy aria-hidden="true" />
