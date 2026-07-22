@@ -18,6 +18,10 @@ const initialProgress: ParseProgress = {
 };
 
 const PLOT_COLUMNS = 5;
+const APP_BASE_PATH = (process.env.NEXT_PUBLIC_BASE_PATH ?? "").replace(
+  /\/+$/,
+  "",
+);
 
 type ReportView = "groups" | "samples";
 
@@ -144,7 +148,7 @@ export function ReportCollator() {
         <div className="site-header__inner">
           <Image
             className="site-logo"
-            src="/favicon.ico"
+            src={`${APP_BASE_PATH}/favicon.ico`}
             alt=""
             width={40}
             height={40}
