@@ -333,16 +333,11 @@ progress {
   height: 1rem;
 }
 
-.plot-copy-feedback {
-  position: absolute;
-  top: 0.4rem;
-  right: 2.75rem;
-  max-width: calc(100% - 3.15rem);
-  padding: 0.35rem 0.45rem;
-  border: 1px solid var(--line);
-  background: var(--paper);
+.plot-copy-button.has-label {
+  width: auto;
+  padding: 0 0.45rem;
   font-size: 0.75rem;
-  line-height: 1.2;
+  white-space: nowrap;
 }
 
 .plot-grid figcaption {

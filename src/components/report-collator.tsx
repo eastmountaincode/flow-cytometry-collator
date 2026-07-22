@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { Check, Copy } from "lucide-react";
+import { Copy } from "lucide-react";
 import { type DragEvent, useEffect, useRef, useState } from "react";
 
 import { exportCollatedPdf } from "@/lib/export-collated-pdf";
@@ -435,33 +435,43 @@ export function ReportCollator() {
                           />
                           <button
                             type="button"
-                            className="plot-copy-button"
-                            aria-label={`Copy ${group.label} plot for ${plot.sampleName}`}
-                            title="Copy plot image"
+                            className={`plot-copy-button${
+                              copyFeedback?.plotId === plot.id
+                                ? " has-label"
+                                : ""
+                            }`}
+                            aria-label={
+                              copyFeedback?.plotId === plot.id
+                                ? copyFeedback.status === "copying"
+                                  ? `Copying ${group.label} plot for ${plot.sampleName}`
+                                  : copyFeedback.status === "copied"
+                                    ? `Copied ${group.label} plot for ${plot.sampleName}`
+                                    : `Copy failed for ${group.label} plot for ${plot.sampleName}`
+                                : `Copy ${group.label} plot for ${plot.sampleName}`
+                            }
+                            title={
+                              copyFeedback?.plotId === plot.id &&
+                              copyFeedback.status === "error"
+                                ? "Copy failed — right-click the image"
+                                : "Copy plot image"
+                            }
                             disabled={copyFeedback?.status === "copying"}
                             onClick={() =>
                               void handleCopyPlot(plot.id, plot.imageUrl)
                             }
                           >
-                            {copyFeedback?.plotId === plot.id &&
-                            copyFeedback.status === "copied" ? (
-                              <Check aria-hidden="true" />
+                            {copyFeedback?.plotId === plot.id ? (
+                              <span aria-live="polite">
+                                {copyFeedback.status === "copying"
+                                  ? "Copying…"
+                                  : copyFeedback.status === "copied"
+                                    ? "Copied"
+                                    : "Copy failed"}
+                              </span>
                             ) : (
                               <Copy aria-hidden="true" />
                             )}
                           </button>
-                          {copyFeedback?.plotId === plot.id &&
-                            copyFeedback.status !== "copying" && (
-                              <span
-                                className="plot-copy-feedback"
-                                role="status"
-                                aria-live="polite"
-                              >
-                                {copyFeedback.status === "copied"
-                                  ? "Copied"
-                                  : "Copy failed — right-click the image"}
-                              </span>
-                            )}
                         </div>
                         <figcaption>
                           <dl>
