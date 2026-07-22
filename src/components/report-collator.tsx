@@ -393,7 +393,7 @@ export function ReportCollator() {
             </nav>
             <div className="toolbar-actions">
               <button type="button" onClick={reset}>
-                New report
+                Clear
               </button>
               <select
                 aria-label="Export report"
