@@ -1,7 +1,8 @@
 "use client";
 
 import Image from "next/image";
-import { type DragEvent, useRef, useState } from "react";
+import { Check, Copy } from "lucide-react";
+import { type DragEvent, useEffect, useRef, useState } from "react";
 
 import { exportCollatedPdf } from "@/lib/export-collated-pdf";
 import {
@@ -24,10 +25,70 @@ const APP_BASE_PATH = (process.env.NEXT_PUBLIC_BASE_PATH ?? "").replace(
 );
 
 type ReportView = "groups" | "samples";
+type CopyStatus = "copying" | "copied" | "error";
+
+type CopyFeedback = {
+  plotId: string;
+  status: CopyStatus;
+};
+
+function imageUrlToPngBlob(imageUrl: string) {
+  return new Promise<Blob>((resolve, reject) => {
+    const image = new window.Image();
+
+    image.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+      const context = canvas.getContext("2d");
+
+      if (!context) {
+        reject(new Error("The browser could not prepare this plot for copying."));
+        return;
+      }
+
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0);
+      canvas.toBlob((blob) => {
+        if (blob) {
+          resolve(blob);
+        } else {
+          reject(new Error("The browser could not create a copyable image."));
+        }
+      }, "image/png");
+    };
+
+    image.onerror = () => {
+      reject(new Error("The plot image could not be read."));
+    };
+    image.src = imageUrl;
+  });
+}
+
+async function copyPlotImage(imageUrl: string) {
+  if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+    throw new Error("Image copying is not supported in this browser.");
+  }
+
+  if (
+    typeof ClipboardItem.supports === "function" &&
+    !ClipboardItem.supports("image/png")
+  ) {
+    throw new Error("PNG clipboard images are not supported in this browser.");
+  }
+
+  await navigator.clipboard.write([
+    new ClipboardItem({
+      "image/png": imageUrlToPngBlob(imageUrl),
+    }),
+  ]);
+}
 
 export function ReportCollator() {
   const inputRef = useRef<HTMLInputElement>(null);
   const dragDepthRef = useRef(0);
+  const copyFeedbackTimeoutRef = useRef<number | null>(null);
   const [report, setReport] = useState<ParsedReport | null>(null);
   const [progress, setProgress] = useState<ParseProgress>(initialProgress);
   const [error, setError] = useState<string | null>(null);
@@ -35,6 +96,34 @@ export function ReportCollator() {
   const [isExporting, setIsExporting] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [view, setView] = useState<ReportView>("groups");
+  const [copyFeedback, setCopyFeedback] = useState<CopyFeedback | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyFeedbackTimeoutRef.current !== null) {
+        window.clearTimeout(copyFeedbackTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  function clearCopyFeedback() {
+    if (copyFeedbackTimeoutRef.current !== null) {
+      window.clearTimeout(copyFeedbackTimeoutRef.current);
+      copyFeedbackTimeoutRef.current = null;
+    }
+    setCopyFeedback(null);
+  }
+
+  function showCopyResult(plotId: string, status: "copied" | "error") {
+    setCopyFeedback({ plotId, status });
+    copyFeedbackTimeoutRef.current = window.setTimeout(
+      () => {
+        copyFeedbackTimeoutRef.current = null;
+        setCopyFeedback(null);
+      },
+      status === "copied" ? 1800 : 4000,
+    );
+  }
 
   async function processFile(file?: File) {
     if (!file) {
@@ -45,6 +134,7 @@ export function ReportCollator() {
     setReport(null);
     setProgress(initialProgress);
     setIsParsing(true);
+    clearCopyFeedback();
 
     try {
       setReport(await parseNovoExpressReport(file, setProgress));
@@ -64,6 +154,7 @@ export function ReportCollator() {
     setError(null);
     setProgress(initialProgress);
     setView("groups");
+    clearCopyFeedback();
     dragDepthRef.current = 0;
     setIsDragging(false);
     if (inputRef.current) {
@@ -139,6 +230,18 @@ export function ReportCollator() {
       );
     } finally {
       setIsExporting(false);
+    }
+  }
+
+  async function handleCopyPlot(plotId: string, imageUrl: string) {
+    clearCopyFeedback();
+    setCopyFeedback({ plotId, status: "copying" });
+
+    try {
+      await copyPlotImage(imageUrl);
+      showCopyResult(plotId, "copied");
+    } catch {
+      showCopyResult(plotId, "error");
     }
   }
 
@@ -323,12 +426,43 @@ export function ReportCollator() {
                   <div className="plot-grid">
                     {group.plots.map((plot) => (
                       <figure key={plot.id}>
-                        {/* PDF crops are generated in-memory and have no stable URL for next/image. */}
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={plot.imageUrl}
-                          alt={`${group.label} plot for ${plot.sampleName}`}
-                        />
+                        <div className="plot-image">
+                          {/* PDF crops are generated in-memory and have no stable URL for next/image. */}
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={plot.imageUrl}
+                            alt={`${group.label} plot for ${plot.sampleName}`}
+                          />
+                          <button
+                            type="button"
+                            className="plot-copy-button"
+                            aria-label={`Copy ${group.label} plot for ${plot.sampleName}`}
+                            title="Copy plot image"
+                            disabled={copyFeedback?.status === "copying"}
+                            onClick={() =>
+                              void handleCopyPlot(plot.id, plot.imageUrl)
+                            }
+                          >
+                            {copyFeedback?.plotId === plot.id &&
+                            copyFeedback.status === "copied" ? (
+                              <Check aria-hidden="true" />
+                            ) : (
+                              <Copy aria-hidden="true" />
+                            )}
+                          </button>
+                          {copyFeedback?.plotId === plot.id &&
+                            copyFeedback.status !== "copying" && (
+                              <span
+                                className="plot-copy-feedback"
+                                role="status"
+                                aria-live="polite"
+                              >
+                                {copyFeedback.status === "copied"
+                                  ? "Copied"
+                                  : "Copy failed — right-click the image"}
+                              </span>
+                            )}
+                        </div>
                         <figcaption>
                           <dl>
                             <div className="plot-caption__sample">
