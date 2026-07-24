@@ -6,11 +6,12 @@ import { type DragEvent, useEffect, useRef, useState } from "react";
 
 import { exportCollatedPdf } from "@/lib/export-collated-pdf";
 import { exportCollatedPowerpoint } from "@/lib/export-collated-powerpoint";
+import type { ParsedReport, ParseProgress } from "@/lib/novoexpress-parser";
+import { MAX_REPORT_BYTES } from "@/lib/report-limits";
 import {
-  parseNovoExpressReport,
-  type ParsedReport,
-  type ParseProgress,
-} from "@/lib/novoexpress-parser";
+  hydrateReport,
+  type TransportReport,
+} from "@/lib/report-transport";
 import {
   displayedGateLabel,
   formatDisplayedGates,
@@ -37,6 +38,50 @@ type CopyFeedback = {
   plotId: string;
   status: CopyStatus;
 };
+
+async function parseReportOnServer(file: File) {
+  const response = await fetch(`${APP_BASE_PATH}/api/parse-report/`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/pdf",
+      "X-Report-File-Name": encodeURIComponent(file.name),
+    },
+    body: file,
+    cache: "no-store",
+  });
+
+  const payload = (await response.json().catch(() => null)) as
+    | TransportReport
+    | { error?: unknown }
+    | null;
+
+  if (!response.ok) {
+    const serverMessage =
+      payload &&
+      "error" in payload &&
+      typeof payload.error === "string"
+        ? payload.error
+        : null;
+    throw new Error(
+      serverMessage ?? `The server could not parse this report (${response.status}).`,
+    );
+  }
+
+  if (
+    !payload ||
+    !("plots" in payload) ||
+    !Array.isArray(payload.plots) ||
+    !("groups" in payload) ||
+    !Array.isArray(payload.groups) ||
+    payload.groups.some(
+      (group) => !("plotIds" in group) || !Array.isArray(group.plotIds),
+    )
+  ) {
+    throw new Error("The server returned an incomplete report.");
+  }
+
+  return hydrateReport(payload);
+}
 
 function imageUrlToPngBlob(imageUrl: string) {
   return new Promise<Blob>((resolve, reject) => {
@@ -139,14 +184,40 @@ export function ReportCollator() {
       return;
     }
 
+    if (
+      file.type !== "application/pdf" &&
+      !file.name.toLowerCase().endsWith(".pdf")
+    ) {
+      setError("Choose a PDF report exported from NovoExpress.");
+      return;
+    }
+    if (file.size > MAX_REPORT_BYTES) {
+      setError(
+        "This PDF is larger than 300 MB. Split the NovoExpress report first.",
+      );
+      return;
+    }
+
     setError(null);
     setReport(null);
-    setProgress(initialProgress);
+    setProgress({
+      currentPage: 0,
+      pageCount: 0,
+      percent: 5,
+      stage: "Processing report on CCIB",
+    });
     setIsParsing(true);
     clearCopyFeedback();
 
     try {
-      setReport(await parseNovoExpressReport(file, setProgress));
+      const parsedReport = await parseReportOnServer(file);
+      setReport(parsedReport);
+      setProgress({
+        currentPage: parsedReport.pageCount,
+        pageCount: parsedReport.pageCount,
+        percent: 100,
+        stage: "Report ready",
+      });
     } catch (cause) {
       setError(
         cause instanceof Error

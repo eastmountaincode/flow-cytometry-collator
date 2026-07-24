@@ -1,9 +1,9 @@
 import type { PDFPageProxy } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { AXIS_LABEL_TEMPLATE_SETS } from "./axis-label-templates.generated";
+import { MAX_REPORT_BYTES } from "./report-limits";
 
 const PARSE_SCALE = 1;
 const RENDER_SCALE = 2.4;
-const MAX_FILE_BYTES = 300 * 1024 * 1024;
 const AXIS_FINGERPRINT_WIDTH = 64;
 const AXIS_FINGERPRINT_HEIGHT = 16;
 const AXIS_LABEL_MATCH_MARGIN = 0.03;
@@ -149,7 +149,33 @@ export type ParseProgress = {
   stage: string;
 };
 
+export type ReportFile = {
+  name: string;
+  type: string;
+  size: number;
+  arrayBuffer: () => Promise<ArrayBuffer>;
+};
+
+export type ParserCanvasFactory = (
+  width: number,
+  height: number,
+) => HTMLCanvasElement;
+
+export type ParserOptions = {
+  createCanvas?: ParserCanvasFactory;
+};
+
 type PdfJsModule = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
+
+function createBrowserCanvas(width: number, height: number) {
+  if (typeof document === "undefined") {
+    throw new Error("No PDF canvas implementation is available.");
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  return canvas;
+}
 
 function applyMatrix(point: [number, number], matrix: Matrix) {
   const [x, y] = point;
@@ -1070,14 +1096,13 @@ async function getPlotImageData(
 function imageDataCanvas(
   image: PdfImageData,
   pdfjs: PdfJsModule,
+  createCanvas: ParserCanvasFactory,
 ) {
   if (!image.width || !image.height) {
     return null;
   }
 
-  const canvas = document.createElement("canvas");
-  canvas.width = image.width;
-  canvas.height = image.height;
+  const canvas = createCanvas(image.width, image.height);
   const context = canvas.getContext("2d");
   if (!context) {
     return null;
@@ -1117,6 +1142,7 @@ function cropPlot(
   pageCanvas: HTMLCanvasElement,
   box: PlotBox,
   scale: number,
+  createCanvas: ParserCanvasFactory,
   axisSourceCanvas?: HTMLCanvasElement | null,
 ) {
   const sourceX = Math.max(0, Math.floor((box.x - 2) * scale));
@@ -1129,13 +1155,11 @@ function cropPlot(
     pageCanvas.height - sourceY,
     Math.ceil((box.height + 3) * scale),
   );
-  const cropCanvas = document.createElement("canvas");
-  cropCanvas.width = sourceWidth;
-  cropCanvas.height = sourceHeight;
+  const cropCanvas = createCanvas(sourceWidth, sourceHeight);
   const context = cropCanvas.getContext("2d");
 
   if (!context) {
-    throw new Error("Your browser could not create a canvas for the PDF page.");
+    throw new Error("A canvas could not be created for the PDF page.");
   }
 
   context.fillStyle = "#ffffff";
@@ -1172,22 +1196,26 @@ function cropPlot(
 }
 
 export async function parseNovoExpressReport(
-  file: File,
+  file: ReportFile,
   onProgress: (progress: ParseProgress) => void,
+  options: ParserOptions = {},
 ): Promise<ParsedReport> {
   if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
     throw new Error("Choose a PDF report exported from NovoExpress.");
   }
 
-  if (file.size > MAX_FILE_BYTES) {
+  if (file.size > MAX_REPORT_BYTES) {
     throw new Error("This PDF is larger than 300 MB. Split the NovoExpress report first.");
   }
 
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-    "pdfjs-dist/legacy/build/pdf.worker.min.mjs",
-    import.meta.url,
-  ).toString();
+  if (typeof window !== "undefined") {
+    pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+      "pdfjs-dist/legacy/build/pdf.worker.min.mjs",
+      import.meta.url,
+    ).toString();
+  }
+  const createCanvas = options.createCanvas ?? createBrowserCanvas;
 
   const loadingTask = pdfjs.getDocument({
     data: new Uint8Array(await file.arrayBuffer()),
@@ -1361,21 +1389,23 @@ export async function parseNovoExpressReport(
 
     if (detectedPlots.length > 0) {
       const renderViewport = page.getViewport({ scale: RENDER_SCALE });
-      pageCanvas = document.createElement("canvas");
-      pageCanvas.width = Math.ceil(renderViewport.width);
-      pageCanvas.height = Math.ceil(renderViewport.height);
+      pageCanvas = createCanvas(
+        Math.ceil(renderViewport.width),
+        Math.ceil(renderViewport.height),
+      );
       await page.render({ canvas: pageCanvas, viewport: renderViewport }).promise;
 
       for (const detectedPlot of detectedPlots) {
         const { box } = detectedPlot;
         const sourceImage = await getPlotImageData(page, detectedPlot);
         const axisSourceCanvas = sourceImage
-          ? imageDataCanvas(sourceImage, pdfjs)
+          ? imageDataCanvas(sourceImage, pdfjs, createCanvas)
           : null;
         const croppedPlot = cropPlot(
           pageCanvas,
           box,
           RENDER_SCALE,
+          createCanvas,
           axisSourceCanvas,
         );
         if (axisSourceCanvas) {

@@ -13,6 +13,12 @@ if (basePath && !basePath.startsWith("/")) {
 const nextConfig: NextConfig = {
   basePath,
   output: "standalone",
+  outputFileTracingIncludes: {
+    "/api/parse-report": [
+      "./node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs",
+    ],
+  },
+  serverExternalPackages: ["@napi-rs/canvas", "pdfjs-dist"],
   trailingSlash: true,
 };
 
