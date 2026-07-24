@@ -1,4 +1,4 @@
-import type { PDFPageProxy } from "pdfjs-dist";
+import type { PDFPageProxy } from "pdfjs-dist/legacy/build/pdf.mjs";
 
 const PARSE_SCALE = 1;
 const RENDER_SCALE = 2.4;
@@ -38,6 +38,21 @@ type StatsSection = {
   hasAxisColumns: boolean;
 };
 
+type PlotStructure = {
+  inputPopulation: string;
+  gateNames: string[];
+};
+
+type PendingPlot = {
+  box: PlotBox;
+  documentIndex: number;
+  pageNumber: number;
+  title: string;
+  imageUrl: string;
+  structure: PlotStructure | null;
+  isCompensation: boolean;
+};
+
 type RawPlot = {
   box: PlotBox;
   documentIndex: number;
@@ -50,6 +65,7 @@ type RawPlot = {
   imageUrl: string;
   fallbackGroupKey?: string;
   fallbackGroupLabel?: string;
+  nativeGateName?: string;
   isCompensation: boolean;
 };
 
@@ -97,7 +113,7 @@ export type ParseProgress = {
   stage: string;
 };
 
-type PdfJsModule = typeof import("pdfjs-dist");
+type PdfJsModule = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
 
 function applyMatrix(point: [number, number], matrix: Matrix) {
   const [x, y] = point;
@@ -249,13 +265,15 @@ function extractStatsSections(rows: TextRow[]) {
     const parentHeader = headerCells.find((cell) => cell.text === "% Parent");
     const xHeader = headerCells.find((cell) => cell.text === "X");
     const yHeader = headerCells.find((cell) => cell.text === "Y");
-    const meanXHeader = headerCells.find((cell) => cell.text === "Mean X");
+    const summaryXHeader = headerCells.find(
+      (cell) => cell.text === "Mean X" || cell.text === "Median X",
+    );
 
     if (!gateHeader || !countHeader || !parentHeader) {
       continue;
     }
 
-    const hasAxisColumns = Boolean(xHeader && yHeader && meanXHeader);
+    const hasAxisColumns = Boolean(xHeader && yHeader && summaryXHeader);
     const gateBoundary = countHeader.x - 2;
     const countMaximum = (countHeader.x + parentHeader.x) / 2;
     const xMinimum = xHeader
@@ -264,8 +282,8 @@ function extractStatsSections(rows: TextRow[]) {
     const xMaximum = xHeader && yHeader
       ? (xHeader.x + yHeader.x) / 2
       : Number.POSITIVE_INFINITY;
-    const yMaximum = yHeader && meanXHeader
-      ? (yHeader.x + meanXHeader.x) / 2
+    const yMaximum = yHeader && summaryXHeader
+      ? (yHeader.x + summaryXHeader.x) / 2
       : Number.POSITIVE_INFINITY;
     const nextTitleY = titleIndexes[titlePosition + 1]
       ? rows[titleIndexes[titlePosition + 1]].y
@@ -426,6 +444,206 @@ function getPlotTitle(box: PlotBox, rows: TextRow[]) {
   );
 }
 
+function canonicalGate(value: string) {
+  return normalizeText(value)
+    .replace(/\s+/g, "")
+    .toLocaleLowerCase();
+}
+
+function horizontalOverlap(first: PlotBox, second: PlotBox) {
+  const left = Math.max(first.x, second.x);
+  const right = Math.min(first.x + first.width, second.x + second.width);
+  return Math.max(0, right - left);
+}
+
+function extractPlotStructure(
+  box: PlotBox,
+  pageBoxes: PlotBox[],
+  rows: TextRow[],
+): PlotStructure | null {
+  const nextBoxInColumn = pageBoxes
+    .filter(
+      (candidate) =>
+        candidate !== box &&
+        candidate.y > box.y + box.height &&
+        horizontalOverlap(box, candidate) >= Math.min(box.width, candidate.width) * 0.5,
+    )
+    .sort((a, b) => a.y - b.y)[0];
+  const nextStatsTitle = rows.find(
+    (row) =>
+      row.y > box.y + box.height &&
+      rowText(row).startsWith("Sample Statistics of "),
+  );
+  const maximumY = Math.min(
+    nextBoxInColumn?.y ? nextBoxInColumn.y - 4 : Number.POSITIVE_INFINITY,
+    nextStatsTitle?.y ? nextStatsTitle.y - 4 : Number.POSITIVE_INFINITY,
+    box.y + box.height + 230,
+  );
+  const minimumX = box.x - 5;
+  const maximumX = box.x + box.width + 5;
+  const itemsInBand = (row: TextRow) =>
+    row.items.filter((item) => item.x >= minimumX && item.x <= maximumX);
+
+  const header = rows.find((row) => {
+    if (row.y <= box.y + box.height || row.y >= maximumY) {
+      return false;
+    }
+    const cells = itemsInBand(row).map((item) => normalizeText(item.text));
+    return cells.includes("Gate") && cells.includes("Count");
+  });
+
+  if (!header) {
+    return null;
+  }
+
+  const headerItems = itemsInBand(header);
+  const gateHeader = headerItems.find(
+    (item) => normalizeText(item.text) === "Gate",
+  );
+  const countHeader = headerItems.find(
+    (item) => normalizeText(item.text) === "Count",
+  );
+
+  if (!gateHeader || !countHeader) {
+    return null;
+  }
+
+  const headerText = normalizeText(
+    headerItems
+      .filter((item) => item.x >= countHeader.x + 15)
+      .map((item) => item.text)
+      .join(" "),
+  );
+  const percentColumns = [...headerText.matchAll(/%\s+(.+?)(?=\s+%|$)/g)]
+    .map((match) => normalizeText(match[1]))
+    .filter(Boolean);
+  const firstPercentColumn = percentColumns[0] ?? "All";
+  const inputPopulation =
+    canonicalGate(firstPercentColumn) === "all"
+      ? "All events"
+      : firstPercentColumn;
+  const gateBoundary = (gateHeader.x + countHeader.x) / 2;
+  const gateNames: string[] = [];
+
+  for (const row of rows) {
+    if (row.y <= header.y || row.y >= maximumY) {
+      continue;
+    }
+
+    const bandItems = itemsInBand(row);
+    const gateName = normalizeText(
+      bandItems
+        .filter(
+          (item) =>
+            item.x >= gateHeader.x - 1 &&
+            item.x < gateBoundary &&
+            !/^\d+(?:\.\d+)?%$/.test(normalizeText(item.text)),
+        )
+        .map((item) => item.text)
+        .join(" "),
+    );
+    const countText = normalizeText(
+      bandItems
+        .filter((item) => item.x >= gateBoundary)
+        .map((item) => item.text)
+        .join(" "),
+    );
+
+    if (
+      gateName &&
+      gateName.length > 1 &&
+      !/^%/.test(gateName) &&
+      (/\d/.test(countText) || !/\d/.test(gateName)) &&
+      !gateNames.some((candidate) => canonicalGate(candidate) === canonicalGate(gateName))
+    ) {
+      gateNames.push(gateName);
+    }
+  }
+
+  return gateNames.length > 0
+    ? {
+        inputPopulation,
+        gateNames,
+      }
+    : null;
+}
+
+function matchStatsGateName(gateName: string, rows: StatsRow[]) {
+  const key = canonicalGate(gateName);
+  const exact = rows.find((row) => canonicalGate(row.gateName) === key);
+  if (exact) {
+    return exact.gateName;
+  }
+
+  const prefixMatches = rows.filter((row) => {
+    const candidate = canonicalGate(row.gateName);
+    return candidate.startsWith(key) || key.startsWith(candidate);
+  });
+  return prefixMatches.length === 1 ? prefixMatches[0].gateName : gateName;
+}
+
+function normalizePlotStructure(
+  structure: PlotStructure,
+  statsRows: StatsRow[],
+) {
+  const inputPopulation =
+    structure.inputPopulation === "All events"
+      ? "All events"
+      : matchStatsGateName(structure.inputPopulation, statsRows);
+  const gateNames = structure.gateNames.map((gateName) =>
+    gateName === "All" ? "All" : matchStatsGateName(gateName, statsRows),
+  );
+  return {
+    inputPopulation,
+    gateNames: [...new Set(gateNames)],
+  };
+}
+
+function getInputPopulationPath(inputPopulation: string, rows: StatsRow[]) {
+  if (inputPopulation === "All events" || canonicalGate(inputPopulation) === "all") {
+    return "All events";
+  }
+
+  const inputRow = rows.find(
+    (row) => canonicalGate(row.gateName) === canonicalGate(inputPopulation),
+  );
+  if (!inputRow || inputRow.parentPath === "All events") {
+    return inputPopulation;
+  }
+  return `${inputRow.parentPath} / ${inputRow.gateName}`;
+}
+
+function getOutputGates(structure: PlotStructure) {
+  const inputKey = canonicalGate(structure.inputPopulation);
+  return structure.gateNames.filter((gateName) => {
+    const key = canonicalGate(gateName);
+    return key !== "all" && key !== inputKey;
+  });
+}
+
+function describePlotStructure(structure: PlotStructure) {
+  const outputGates = getOutputGates(structure);
+  if (outputGates.length === 0) {
+    return `${structure.inputPopulation}, no displayed gate`;
+  }
+
+  const quadrantPrefixes = new Set(
+    outputGates
+      .map((gateName) => gateName.match(/^(Q\d+)-\d+$/i)?.[1])
+      .filter((value): value is string => Boolean(value)),
+  );
+  if (
+    quadrantPrefixes.size === 1 &&
+    outputGates.every((gateName) => /^(Q\d+)-\d+$/i.test(gateName))
+  ) {
+    return `${[...quadrantPrefixes][0]} quadrants`;
+  }
+
+  return outputGates.length === 1
+    ? `${outputGates[0]} gate`
+    : `${outputGates.join(", ")} gates`;
+}
+
 function parsePlotTitle(title: string) {
   const parts = title.split(/\s*\/\s*/).map(normalizeText).filter(Boolean);
   return {
@@ -487,9 +705,9 @@ export async function parseNovoExpressReport(
     throw new Error("This PDF is larger than 300 MB. Split the NovoExpress report first.");
   }
 
-  const pdfjs = await import("pdfjs-dist");
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-    "pdfjs-dist/build/pdf.worker.min.mjs",
+    "pdfjs-dist/legacy/build/pdf.worker.min.mjs",
     import.meta.url,
   ).toString();
 
@@ -500,6 +718,7 @@ export async function parseNovoExpressReport(
   const pageCount = documentProxy.numPages;
   const allStats = new Map<string, { sampleName: string; rows: StatsRow[] }>();
   const rawPlots: RawPlot[] = [];
+  let pendingPlots: PendingPlot[] = [];
   let reportTitle = file.name.replace(/\.pdf$/i, "");
   let metadata: ReportMetadata = {
     fileName: null,
@@ -534,6 +753,85 @@ export async function parseNovoExpressReport(
     };
   };
 
+  const assignPendingPlots = (section: StatsSection) => {
+    if (pendingPlots.length === 0) {
+      return;
+    }
+
+    const identity = sampleIdentity(section.sampleName);
+    const structuralOccurrences = new Map<string, number>();
+
+    for (const [plotIndex, pendingPlot] of pendingPlots.entries()) {
+      const normalizedStructure = pendingPlot.structure
+        ? normalizePlotStructure(pendingPlot.structure, section.rows)
+        : null;
+      const outputGates = normalizedStructure
+        ? getOutputGates(normalizedStructure)
+        : [];
+      const matchedGate = outputGates.length > 0
+        ? section.rows.find(
+            (row) =>
+              canonicalGate(row.gateName) === canonicalGate(outputGates[0]),
+          )
+        : undefined;
+      const matchedStats =
+        matchedGate ??
+        (section.rows.length === pendingPlots.length
+          ? section.rows[plotIndex]
+          : undefined);
+      const titleParts = pendingPlot.title
+        ? parsePlotTitle(pendingPlot.title)
+        : null;
+      const parentPath = normalizedStructure
+        ? getInputPopulationPath(
+            normalizedStructure.inputPopulation,
+            section.rows,
+          )
+        : titleParts?.parentPath && titleParts.parentPath !== "All events"
+          ? titleParts.parentPath
+          : matchedStats?.parentPath ?? "All events";
+      let fallbackGroupKey: string | undefined;
+      let fallbackGroupLabel: string | undefined;
+
+      if (!section.hasAxisColumns) {
+        const baseStructureKey = normalizedStructure
+          ? [
+              parentPath,
+              normalizedStructure.inputPopulation,
+              ...outputGates,
+            ]
+              .map((value) => canonicalGate(value))
+              .join("::")
+          : `unlabeled-layout-${pendingPlots.length}-${plotIndex}`;
+        const occurrence = (structuralOccurrences.get(baseStructureKey) ?? 0) + 1;
+        structuralOccurrences.set(baseStructureKey, occurrence);
+        fallbackGroupKey = `native-layout::${baseStructureKey}::${occurrence}`;
+        fallbackGroupLabel = normalizedStructure
+          ? describePlotStructure(normalizedStructure)
+          : `Unlabeled plot ${plotIndex + 1}`;
+      }
+
+      rawPlots.push({
+        box: pendingPlot.box,
+        documentIndex: pendingPlot.documentIndex,
+        pageNumber: pendingPlot.pageNumber,
+        ...identity,
+        title: section.sampleName,
+        parentPath,
+        imageUrl: pendingPlot.imageUrl,
+        fallbackGroupKey,
+        fallbackGroupLabel,
+        nativeGateName:
+          outputGates[0] ??
+          matchedStats?.gateName ??
+          normalizedStructure?.gateNames.at(-1),
+        isCompensation: pendingPlot.isCompensation,
+      });
+    }
+
+    pendingPlots = [];
+  };
+
   onProgress({
     currentPage: 0,
     pageCount,
@@ -556,12 +854,6 @@ export async function parseNovoExpressReport(
       runTime: metadata.runTime ?? pageMetadata.runTime ?? null,
       software: metadata.software ?? pageMetadata.software ?? null,
     };
-    if (rows.some((row) => /^Specimen\d+\b/.test(rowText(row)))) {
-      inCompensationSection = false;
-    }
-    if (rows.some((row) => rowText(row) === "Compensation Specimen")) {
-      inCompensationSection = true;
-    }
     const firstReportRow = rows.find((row) => rowText(row).startsWith("Report of "));
     if (firstReportRow) {
       reportTitle = rowText(firstReportRow);
@@ -576,79 +868,77 @@ export async function parseNovoExpressReport(
     }
 
     const boxes = extractPlotBoxes(page, operatorList, pdfjs);
+    const pagePlotEvents: Array<{
+      type: "plot";
+      y: number;
+      plot: PendingPlot;
+    }> = [];
+    let pageCanvas: HTMLCanvasElement | null = null;
+
     if (boxes.length > 0) {
       const renderViewport = page.getViewport({ scale: RENDER_SCALE });
-      const pageCanvas = document.createElement("canvas");
+      pageCanvas = document.createElement("canvas");
       pageCanvas.width = Math.ceil(renderViewport.width);
       pageCanvas.height = Math.ceil(renderViewport.height);
       await page.render({ canvas: pageCanvas, viewport: renderViewport }).promise;
 
-      const assignedBoxes = new Set<PlotBox>();
-      let previousSectionY = Number.NEGATIVE_INFINITY;
-
-      for (const section of pageStats.sort((a, b) => a.titleY - b.titleY)) {
-        const sectionBoxes = boxes.filter(
-          (box) =>
-            !assignedBoxes.has(box) &&
-            box.y > previousSectionY &&
-            box.y + box.height <= section.titleY + 8,
-        );
-
-        for (const [plotIndex, box] of sectionBoxes.entries()) {
-          assignedBoxes.add(box);
-          const title = getPlotTitle(box, rows);
-          const titleParts = title ? parsePlotTitle(title) : null;
-          const matchedStats =
-            section.rows.length === sectionBoxes.length
-              ? section.rows[plotIndex]
-              : undefined;
-          const parentPath = titleParts?.parentPath && titleParts.parentPath !== "All events"
-            ? titleParts.parentPath
-            : matchedStats?.parentPath ?? "Rasterized NovoExpress layout";
-          const identity = sampleIdentity(section.sampleName);
-          const needsLayoutFallback = !section.hasAxisColumns;
-
-          rawPlots.push({
+      for (const box of boxes) {
+        pagePlotEvents.push({
+          type: "plot",
+          y: box.y,
+          plot: {
             box,
             documentIndex,
             pageNumber,
-            ...identity,
-            title: title || section.sampleName,
-            parentPath,
+            title: getPlotTitle(box, rows),
             imageUrl: cropPlot(pageCanvas, box, RENDER_SCALE),
-            isCompensation: inCompensationSection,
-            ...(!needsLayoutFallback
-              ? {}
-              : {
-                  fallbackGroupKey: `raster-layout-${sectionBoxes.length}-${plotIndex}`,
-                  fallbackGroupLabel: `Plot ${plotIndex + 1} of ${sectionBoxes.length} (rasterized axes)`,
-                }),
-          });
-          documentIndex += 1;
-        }
-
-        previousSectionY = section.titleY;
+            structure: extractPlotStructure(box, boxes, rows),
+            isCompensation: false,
+          },
+        });
+        documentIndex += 1;
       }
+    }
 
-      for (const box of boxes.filter((candidate) => !assignedBoxes.has(candidate))) {
-        const title = getPlotTitle(box, rows);
-        if (title) {
-          const { sampleName, parentPath } = parsePlotTitle(title);
-          const identity = sampleIdentity(sampleName);
-          rawPlots.push({
-            box,
-            documentIndex,
-            pageNumber,
-            ...identity,
-            title,
-            parentPath,
-            imageUrl: cropPlot(pageCanvas, box, RENDER_SCALE),
-            isCompensation: inCompensationSection,
-          });
-          documentIndex += 1;
-        }
+    const markerEvents: Array<{
+      type: "compensation" | "specimen";
+      y: number;
+    }> = rows.flatMap((row): Array<{
+      type: "compensation" | "specimen";
+      y: number;
+    }> => {
+      const text = rowText(row);
+      if (text === "Compensation Specimen") {
+        return [{ type: "compensation" as const, y: row.y }];
       }
+      if (/^Specimen\d+\b/.test(text)) {
+        return [{ type: "specimen" as const, y: row.y }];
+      }
+      return [];
+    });
+    const statsEvents = pageStats.map((section) => ({
+      type: "stats" as const,
+      y: section.titleY,
+      section,
+    }));
+    const pageEvents = [...markerEvents, ...pagePlotEvents, ...statsEvents].sort(
+      (a, b) => a.y - b.y,
+    );
 
+    for (const event of pageEvents) {
+      if (event.type === "compensation") {
+        inCompensationSection = true;
+      } else if (event.type === "specimen") {
+        inCompensationSection = false;
+      } else if (event.type === "plot") {
+        event.plot.isCompensation = inCompensationSection;
+        pendingPlots.push(event.plot);
+      } else if (event.type === "stats") {
+        assignPendingPlots(event.section);
+      }
+    }
+
+    if (pageCanvas) {
       pageCanvas.width = 1;
       pageCanvas.height = 1;
     }
@@ -678,7 +968,8 @@ export async function parseNovoExpressReport(
   }
 
   const parsedPlots: ParsedPlot[] = [];
-  let usedLayoutFallback = false;
+  let usedNativeStructure = false;
+  let usedPositionalFallback = false;
   const unmatchedStatsSamples: string[] = [];
   for (const [, samplePlots] of plotsBySample) {
     const orderedPlots = samplePlots.sort(
@@ -687,14 +978,19 @@ export async function parseNovoExpressReport(
     const sampleStats = allStats.get(orderedPlots[0].statsKey);
 
     const statsMismatch = sampleStats?.rows.length !== orderedPlots.length;
-    const usesRasterFallback = orderedPlots.some(
-      (plot) => plot.fallbackGroupKey || plot.isCompensation,
-    ) || statsMismatch;
-    usedLayoutFallback ||= usesRasterFallback;
+    const usesNativeStructure = orderedPlots.some((plot) =>
+      plot.fallbackGroupKey?.startsWith("native-layout::"),
+    );
+    const needsPositionalFallback =
+      !usesNativeStructure &&
+      !orderedPlots.every((plot) => plot.isCompensation) &&
+      statsMismatch;
+    usedNativeStructure ||= usesNativeStructure;
+    usedPositionalFallback ||= needsPositionalFallback;
 
     if (!sampleStats) {
       unmatchedStatsSamples.push(orderedPlots[0].sampleName);
-    } else if (!usesRasterFallback && statsMismatch) {
+    } else if (needsPositionalFallback) {
       warnings.push(
         `${orderedPlots[0].sampleName} has ${orderedPlots.length} plots but ${sampleStats.rows.length} statistics rows. Review its grouping.`,
       );
@@ -705,14 +1001,19 @@ export async function parseNovoExpressReport(
         ? `compensation::${plot.sampleKey}::${indexInSample}`
         : undefined;
       const layoutFallbackKey = compensationKey ?? plot.fallbackGroupKey ?? (
-        statsMismatch ? `raster-layout-${orderedPlots.length}-${indexInSample}` : undefined
+        statsMismatch ? `position-layout-${orderedPlots.length}-${indexInSample}` : undefined
       );
       const statsRow = layoutFallbackKey
         ? undefined
         : sampleStats?.rows[indexInSample];
-      const axisX = statsRow?.axisX || "Rasterized x-axis";
-      const axisY = statsRow?.axisY || "Rasterized y-axis";
-      const gateName = statsRow?.gateName ?? `Plot position ${indexInSample + 1}`;
+      const axisX = statsRow?.axisX || "Embedded in plot image";
+      const axisY = statsRow?.axisY || "Embedded in plot image";
+      const gateName =
+        plot.nativeGateName ??
+        statsRow?.gateName ??
+        (plot.isCompensation
+          ? "Not listed"
+          : `Plot position ${indexInSample + 1}`);
       const groupLabel = plot.isCompensation
         ? `${plot.sampleName}, plot ${indexInSample + 1}`
         : plot.fallbackGroupLabel ?? (
@@ -758,9 +1059,14 @@ export async function parseNovoExpressReport(
       `${unmatchedStatsSamples.length} sample layout${unmatchedStatsSamples.length === 1 ? "" : "s"} had no matching statistics table${examples ? ` (for example: ${examples})` : ""}. Those plots use positional grouping.`,
     );
   }
-  if (usedLayoutFallback) {
+  if (usedNativeStructure) {
     warnings.unshift(
-      "Some axis labels are rasterized or do not map one-to-one to statistics rows. Matching uses plot position within each sample layout; compensation controls stay separate. Review groups before export.",
+      "This report stores axis captions inside the plot images. Matching uses the selectable input-population and gate-table structure; compensation controls stay separate.",
+    );
+  }
+  if (usedPositionalFallback) {
+    warnings.push(
+      "Some plots did not expose enough table structure for gate-based matching, so those plots use their position within the sample layout. Review those groups before export.",
     );
   }
   const pathsByAxes = new Map<string, Set<string>>();
@@ -774,7 +1080,8 @@ export async function parseNovoExpressReport(
     if (
       paths.size > 1 &&
       !axisKey.includes("unknown") &&
-      !axisKey.includes("rasterized")
+      !axisKey.includes("rasterized") &&
+      !axisKey.includes("embedded")
     ) {
       const [axisX, axisY] = axisKey.split("::");
       warnings.push(
