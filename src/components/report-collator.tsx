@@ -11,7 +11,11 @@ import {
   type ParsedReport,
   type ParseProgress,
 } from "@/lib/novoexpress-parser";
-import { formatInputPopulations } from "@/lib/report-labels";
+import {
+  displayedGateLabel,
+  formatDisplayedGates,
+  formatInputPopulations,
+} from "@/lib/report-labels";
 
 const initialProgress: ParseProgress = {
   currentPage: 0,
@@ -20,7 +24,6 @@ const initialProgress: ParseProgress = {
   stage: "Waiting for a report",
 };
 
-const PLOT_COLUMNS = 5;
 const APP_BASE_PATH = (process.env.NEXT_PUBLIC_BASE_PATH ?? "").replace(
   /\/+$/,
   "",
@@ -228,7 +231,7 @@ export function ReportCollator() {
     setError(null);
     try {
       if (format === "pdf") {
-        await exportCollatedPdf(report, PLOT_COLUMNS);
+        await exportCollatedPdf(report);
       } else {
         await exportCollatedPowerpoint(report);
       }
@@ -500,15 +503,8 @@ export function ReportCollator() {
                               </dd>
                             </div>
                             <div className="plot-caption__wide">
-                              <dt>
-                                Displayed gate
-                                {plot.displayedGateNames.length === 1 ? "" : "s"}
-                              </dt>
-                              <dd>
-                                {plot.displayedGateNames.length > 0
-                                  ? plot.displayedGateNames.join(", ")
-                                  : "None"}
-                              </dd>
+                              <dt>{displayedGateLabel(plot.displayedGateNames)}</dt>
+                              <dd>{formatDisplayedGates(plot.displayedGateNames)}</dd>
                             </div>
                             <div>
                               <dt>Page</dt>

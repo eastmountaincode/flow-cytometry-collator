@@ -1,12 +1,86 @@
-import type { ParsedReport } from "@/lib/novoexpress-parser";
-import { formatInputPopulations } from "@/lib/report-labels";
+import type { ParsedPlot, ParsedReport } from "@/lib/novoexpress-parser";
+import {
+  displayedGateLabel,
+  formatDisplayedGates,
+  formatInputPopulations,
+} from "@/lib/report-labels";
 
-export async function exportCollatedPdf(
-  report: ParsedReport,
-  columns: number,
+const COLUMNS = 3;
+const ROWS = 2;
+const CARD_PADDING = 7;
+const CAPTION_LABEL_WIDTH = 60;
+const CAPTION_COLUMN_GAP = 4;
+const CAPTION_FONT_SIZE = 7.5;
+const CAPTION_LINE_HEIGHT = 9;
+const CAPTION_FIELD_GAP = 2;
+
+type MetadataField = {
+  label: string;
+  value: string;
+  maximumLines: number;
+};
+
+type MetadataLayout = MetadataField & {
+  lines: string[];
+};
+
+function ellipsize(
+  text: string,
+  maximumWidth: number,
+  measure: (candidate: string) => number,
 ) {
+  const suffix = "...";
+  if (measure(`${text}${suffix}`) <= maximumWidth) {
+    return `${text}${suffix}`;
+  }
+
+  let minimumLength = 0;
+  let maximumLength = text.length;
+  while (minimumLength < maximumLength) {
+    const candidateLength = Math.ceil((minimumLength + maximumLength) / 2);
+    const candidate = `${text.slice(0, candidateLength).trimEnd()}${suffix}`;
+    if (measure(candidate) <= maximumWidth) {
+      minimumLength = candidateLength;
+    } else {
+      maximumLength = candidateLength - 1;
+    }
+  }
+
+  return `${text.slice(0, minimumLength).trimEnd()}${suffix}`;
+}
+
+function metadataFields(plot: ParsedPlot): MetadataField[] {
+  return [
+    {
+      label: "Sample",
+      value: plot.sampleName,
+      maximumLines: 2,
+    },
+    {
+      label: "Input population",
+      value: formatInputPopulations([plot.parentPath]),
+      maximumLines: 2,
+    },
+    {
+      label: displayedGateLabel(plot.displayedGateNames),
+      value: formatDisplayedGates(plot.displayedGateNames),
+      maximumLines: 2,
+    },
+    {
+      label: "Page",
+      value: String(plot.pageNumber),
+      maximumLines: 1,
+    },
+  ];
+}
+
+export async function exportCollatedPdf(report: ParsedReport) {
   const { jsPDF } = await import("jspdf");
-  const pdf = new jsPDF({ orientation: "landscape", unit: "pt", format: "letter" });
+  const pdf = new jsPDF({
+    orientation: "landscape",
+    unit: "pt",
+    format: "letter",
+  });
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
   const margin = 30;
@@ -16,15 +90,53 @@ export async function exportCollatedPdf(
   const availableWidth = pageWidth - margin * 2;
   const availableHeight =
     pageHeight - margin * 2 - headerHeight - footerHeight;
-  const cellWidth = (availableWidth - gap * (columns - 1)) / columns;
-  const rows = Math.max(
-    1,
-    Math.round((columns * availableHeight) / availableWidth),
-  );
-  const cellHeight =
-    (availableHeight - gap * (rows - 1)) / rows;
-  const plotsPerPage = columns * rows;
+  const cellWidth = (availableWidth - gap * (COLUMNS - 1)) / COLUMNS;
+  const cellHeight = (availableHeight - gap * (ROWS - 1)) / ROWS;
+  const plotsPerPage = COLUMNS * ROWS;
+  const captionValueWidth =
+    cellWidth -
+    CARD_PADDING * 2 -
+    CAPTION_LABEL_WIDTH -
+    CAPTION_COLUMN_GAP;
   let hasPage = false;
+
+  const prepareMetadata = (plot: ParsedPlot) => {
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(CAPTION_FONT_SIZE);
+
+    const fields = metadataFields(plot).map((field): MetadataLayout => {
+      const wrapped = pdf.splitTextToSize(
+        field.value,
+        captionValueWidth,
+      ) as string[];
+      const lines =
+        wrapped.length > field.maximumLines
+          ? [
+              ...wrapped.slice(0, field.maximumLines - 1),
+              ellipsize(
+                wrapped[field.maximumLines - 1],
+                captionValueWidth,
+                (candidate) => pdf.getTextWidth(candidate),
+              ),
+            ]
+          : wrapped;
+
+      return {
+        ...field,
+        lines: lines.length > 0 ? lines : [""],
+      };
+    });
+    const captionHeight =
+      CARD_PADDING * 2 +
+      fields.reduce(
+        (height, field) =>
+          height + field.lines.length * CAPTION_LINE_HEIGHT,
+        0,
+      ) +
+      (fields.length - 1) * CAPTION_FIELD_GAP;
+
+    return { fields, captionHeight };
+  };
 
   for (const group of report.groups) {
     for (let start = 0; start < group.plots.length; start += plotsPerPage) {
@@ -34,6 +146,20 @@ export async function exportCollatedPdf(
       hasPage = true;
 
       const pagePlots = group.plots.slice(start, start + plotsPerPage);
+      const plotLayouts = pagePlots.map((plot) => ({
+        plot,
+        metadata: prepareMetadata(plot),
+      }));
+      const rowCaptionHeights = Array.from({ length: ROWS }, (_, row) =>
+        Math.max(
+          ...plotLayouts
+            .slice(row * COLUMNS, (row + 1) * COLUMNS)
+            .map((layout) => layout.metadata.captionHeight),
+          CARD_PADDING * 2 +
+            4 * CAPTION_LINE_HEIGHT +
+            3 * CAPTION_FIELD_GAP,
+        ),
+      );
       const part = Math.floor(start / plotsPerPage) + 1;
       const partCount = Math.ceil(group.plots.length / plotsPerPage);
 
@@ -57,49 +183,82 @@ export async function exportCollatedPdf(
         { align: "right" },
       );
 
-      for (let index = 0; index < pagePlots.length; index += 1) {
-        const plot = pagePlots[index];
-        const column = index % columns;
-        const row = Math.floor(index / columns);
+      for (const [index, layout] of plotLayouts.entries()) {
+        const { plot, metadata } = layout;
+        const column = index % COLUMNS;
+        const row = Math.floor(index / COLUMNS);
         const cellX = margin + column * (cellWidth + gap);
         const cellY = margin + headerHeight + row * (cellHeight + gap);
-        const labelHeight = 18;
-        const availableWidth = cellWidth;
-        const availableHeight = cellHeight - labelHeight;
+        const captionHeight = rowCaptionHeights[row];
+        const dividerY = cellY + cellHeight - captionHeight;
+        const imageAvailableWidth = cellWidth - CARD_PADDING * 2;
+        const imageAvailableHeight =
+          dividerY - cellY - CARD_PADDING * 2;
         const aspectRatio = plot.box.width / plot.box.height;
-        let imageWidth = availableWidth;
+        let imageWidth = imageAvailableWidth;
         let imageHeight = imageWidth / aspectRatio;
 
-        if (imageHeight > availableHeight) {
-          imageHeight = availableHeight;
+        if (imageHeight > imageAvailableHeight) {
+          imageHeight = imageAvailableHeight;
           imageWidth = imageHeight * aspectRatio;
         }
 
-        pdf.setFont("helvetica", "bold");
-        pdf.setFontSize(8.5);
-        pdf.setTextColor(35, 48, 60);
-        pdf.text(plot.sampleName, cellX, cellY + 10, {
-          maxWidth: cellWidth,
-        });
+        pdf.setDrawColor(28, 28, 28);
+        pdf.setLineWidth(0.5);
+        pdf.rect(cellX, cellY, cellWidth, cellHeight);
         pdf.addImage(
           plot.imageUrl,
           "JPEG",
           cellX + (cellWidth - imageWidth) / 2,
-          cellY + labelHeight,
+          cellY +
+            CARD_PADDING +
+            (imageAvailableHeight - imageHeight) / 2,
           imageWidth,
           imageHeight,
           undefined,
           "FAST",
         );
+        pdf.line(cellX, dividerY, cellX + cellWidth, dividerY);
+
+        const labelX = cellX + CARD_PADDING;
+        const valueX =
+          labelX + CAPTION_LABEL_WIDTH + CAPTION_COLUMN_GAP;
+        let baselineY =
+          dividerY + CARD_PADDING + CAPTION_FONT_SIZE;
+
+        for (const [fieldIndex, field] of metadata.fields.entries()) {
+          const textColor =
+            fieldIndex === 0
+              ? ([35, 48, 60] as const)
+              : ([76, 94, 108] as const);
+          pdf.setTextColor(textColor[0], textColor[1], textColor[2]);
+          pdf.setFontSize(CAPTION_FONT_SIZE);
+          pdf.setFont("helvetica", "bold");
+          pdf.text(field.label, labelX, baselineY);
+          pdf.setFont("helvetica", "normal");
+          for (const [lineIndex, line] of field.lines.entries()) {
+            pdf.text(
+              line,
+              valueX,
+              baselineY + lineIndex * CAPTION_LINE_HEIGHT,
+            );
+          }
+          baselineY +=
+            field.lines.length * CAPTION_LINE_HEIGHT +
+            CAPTION_FIELD_GAP;
+        }
       }
 
       pdf.setFont("helvetica", "normal");
       pdf.setFontSize(7.5);
       pdf.setTextColor(112, 126, 138);
       pdf.text(report.fileName, margin, pageHeight - 13);
-      pdf.text("Generated locally in the browser", pageWidth - margin, pageHeight - 13, {
-        align: "right",
-      });
+      pdf.text(
+        "Generated locally in the browser",
+        pageWidth - margin,
+        pageHeight - 13,
+        { align: "right" },
+      );
     }
   }
 

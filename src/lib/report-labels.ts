@@ -13,3 +13,11 @@ export function formatInputPopulations(
   const remaining = labels.length - maximumShown;
   return `${labels.slice(0, maximumShown).join(", ")} (and ${remaining} more)`;
 }
+
+export function formatDisplayedGates(gateNames: string[]) {
+  return gateNames.length > 0 ? gateNames.join(", ") : "None";
+}
+
+export function displayedGateLabel(gateNames: string[]) {
+  return `Displayed gate${gateNames.length === 1 ? "" : "s"}`;
+}
