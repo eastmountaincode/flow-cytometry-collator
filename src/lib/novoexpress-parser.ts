@@ -3,6 +3,11 @@ import type { PDFPageProxy } from "pdfjs-dist/legacy/build/pdf.mjs";
 const PARSE_SCALE = 1;
 const RENDER_SCALE = 2.4;
 const MAX_FILE_BYTES = 300 * 1024 * 1024;
+const AXIS_FINGERPRINT_WIDTH = 64;
+const AXIS_FINGERPRINT_HEIGHT = 16;
+// Across the current 1,421-plot fixture set, matching captions stay below
+// 0.012 distance and different captions stay above 0.179.
+const AXIS_FINGERPRINT_THRESHOLD = 0.075;
 
 type Matrix = [number, number, number, number, number, number];
 
@@ -22,6 +27,25 @@ type PlotBox = {
   y: number;
   width: number;
   height: number;
+};
+
+type PdfImageData = {
+  width: number;
+  height: number;
+  kind?: number;
+  data?: Uint8Array | Uint8ClampedArray;
+  bitmap?: ImageBitmap;
+};
+
+type DetectedPlot = {
+  box: PlotBox;
+  imageObjectId?: string;
+  inlineImage?: PdfImageData;
+};
+
+type AxisFingerprint = {
+  x: Uint8Array;
+  y: Uint8Array;
 };
 
 type StatsRow = {
@@ -66,6 +90,7 @@ type RawPlot = {
   fallbackGroupKey?: string;
   fallbackGroupLabel?: string;
   nativeGateName?: string;
+  hasNativeOutputGate: boolean;
   isCompensation: boolean;
 };
 
@@ -82,7 +107,7 @@ export type ParsedPlot = RawPlot & {
 export type PlotGroup = {
   key: string;
   label: string;
-  parentPath: string;
+  parentPaths: string[];
   axisX: string;
   axisY: string;
   plots: ParsedPlot[];
@@ -357,7 +382,7 @@ function extractPlotBoxes(
   const viewport = page.getViewport({ scale: PARSE_SCALE });
   let currentMatrix: Matrix = [1, 0, 0, 1, 0, 0];
   const stack: Matrix[] = [];
-  const boxes: PlotBox[] = [];
+  const detectedPlots: DetectedPlot[] = [];
 
   for (let index = 0; index < operatorList.fnArray.length; index += 1) {
     const operation = operatorList.fnArray[index];
@@ -413,11 +438,29 @@ function extractPlotBoxes(
       box.height >= 90 &&
       box.height <= viewport.height * 0.4
     ) {
-      boxes.push(box);
+      const imageArgument = args?.[0];
+      detectedPlots.push({
+        box,
+        imageObjectId:
+          operation === pdfjs.OPS.paintImageXObject &&
+          typeof imageArgument === "string"
+            ? imageArgument
+            : undefined,
+        inlineImage:
+          operation === pdfjs.OPS.paintInlineImageXObject &&
+          typeof imageArgument === "object" &&
+          imageArgument !== null
+            ? (imageArgument as PdfImageData)
+            : undefined,
+      });
     }
   }
 
-  return boxes.sort((a, b) => a.y - b.y || a.x - b.x);
+  return detectedPlots.sort(
+    (a, b) =>
+      a.box.y - b.box.y ||
+      a.box.x - b.box.x,
+  );
 }
 
 function getPlotTitle(box: PlotBox, rows: TextRow[]) {
@@ -652,10 +695,325 @@ function parsePlotTitle(title: string) {
   };
 }
 
+function makeAxisBandFingerprint(
+  cropCanvas: HTMLCanvasElement,
+  axis: "x" | "y",
+) {
+  // NovoExpress raster plots place the X caption in the bottom strip and the
+  // rotated Y caption in the left strip of the embedded plot image.
+  const horizontal = axis === "x";
+  const bandX = Math.floor(
+    cropCanvas.width * (horizontal ? 0.02 : 0.01),
+  );
+  const bandY = Math.floor(
+    cropCanvas.height * (horizontal ? 0.895 : 0.06),
+  );
+  const bandWidth = Math.max(
+    1,
+    Math.ceil(cropCanvas.width * (horizontal ? 0.96 : 0.09)),
+  );
+  const bandHeight = Math.max(
+    1,
+    Math.ceil(cropCanvas.height * (horizontal ? 0.1 : 0.8)),
+  );
+  const sourceWidth = Math.min(bandWidth, cropCanvas.width - bandX);
+  const sourceHeight = Math.min(bandHeight, cropCanvas.height - bandY);
+  const bandCanvas = document.createElement("canvas");
+  bandCanvas.width = horizontal ? sourceWidth : sourceHeight;
+  bandCanvas.height = horizontal ? sourceHeight : sourceWidth;
+  const bandContext = bandCanvas.getContext("2d", {
+    willReadFrequently: true,
+  });
+  if (!bandContext) {
+    return null;
+  }
+
+  bandContext.fillStyle = "#ffffff";
+  bandContext.fillRect(0, 0, bandCanvas.width, bandCanvas.height);
+  if (horizontal) {
+    bandContext.drawImage(
+      cropCanvas,
+      bandX,
+      bandY,
+      sourceWidth,
+      sourceHeight,
+      0,
+      0,
+      sourceWidth,
+      sourceHeight,
+    );
+  } else {
+    bandContext.translate(sourceHeight, 0);
+    bandContext.rotate(Math.PI / 2);
+    bandContext.drawImage(
+      cropCanvas,
+      bandX,
+      bandY,
+      sourceWidth,
+      sourceHeight,
+      0,
+      0,
+      sourceWidth,
+      sourceHeight,
+    );
+    bandContext.setTransform(1, 0, 0, 1, 0, 0);
+  }
+
+  const pixels = bandContext.getImageData(
+    0,
+    0,
+    bandCanvas.width,
+    bandCanvas.height,
+  );
+
+  const isInk = (x: number, y: number) => {
+    const offset = (y * pixels.width + x) * 4;
+    const luminance =
+      (pixels.data[offset] * 77 +
+        pixels.data[offset + 1] * 150 +
+        pixels.data[offset + 2] * 29) >>
+      8;
+    return luminance < 190;
+  };
+
+  const findInkBounds = (maximumAllowedX = pixels.width - 1) => {
+    let minimumX = pixels.width;
+    let minimumY = pixels.height;
+    let maximumX = -1;
+    let maximumY = -1;
+    let inkPixels = 0;
+
+    for (let y = 0; y < pixels.height; y += 1) {
+      for (
+        let x = 0;
+        x < pixels.width && x <= maximumAllowedX;
+        x += 1
+      ) {
+        if (!isInk(x, y)) {
+          continue;
+        }
+
+        inkPixels += 1;
+        minimumX = Math.min(minimumX, x);
+        minimumY = Math.min(minimumY, y);
+        maximumX = Math.max(maximumX, x);
+        maximumY = Math.max(maximumY, y);
+      }
+    }
+
+    return inkPixels < 8 || maximumX < minimumX || maximumY < minimumY
+      ? null
+      : { minimumX, minimumY, maximumX, maximumY };
+  };
+
+  let bounds = findInkBounds();
+  if (!bounds) {
+    bandCanvas.width = 1;
+    bandCanvas.height = 1;
+    return null;
+  }
+
+  const columnRuns: Array<{ start: number; end: number }> = [];
+  let runStart: number | null = null;
+  for (let x = bounds.minimumX; x <= bounds.maximumX; x += 1) {
+    let hasInk = false;
+    for (let y = bounds.minimumY; y <= bounds.maximumY; y += 1) {
+      if (isInk(x, y)) {
+        hasInk = true;
+        break;
+      }
+    }
+
+    if (hasInk && runStart === null) {
+      runStart = x;
+    }
+    if (
+      runStart !== null &&
+      (!hasInk || x === bounds.maximumX)
+    ) {
+      columnRuns.push({
+        start: runStart,
+        end: hasInk && x === bounds.maximumX ? x : x - 1,
+      });
+      runStart = null;
+    }
+  }
+
+  const axisLabelHeight = bounds.maximumY - bounds.minimumY + 1;
+  if (
+    axisLabelHeight >= cropCanvas.height * 0.056 &&
+    columnRuns.length >= 6
+  ) {
+    const precedingRunIndex = columnRuns.length - 6;
+    const precedingRun = columnRuns[precedingRunIndex];
+    const suffixStart = columnRuns[precedingRunIndex + 1];
+    const suffixGap = suffixStart.start - precedingRun.end - 1;
+    if (suffixGap >= cropCanvas.width * 0.019) {
+      bounds = findInkBounds(precedingRun.end) ?? bounds;
+    }
+  }
+
+  const normalizedCanvas = document.createElement("canvas");
+  normalizedCanvas.width = AXIS_FINGERPRINT_WIDTH;
+  normalizedCanvas.height = AXIS_FINGERPRINT_HEIGHT;
+  const normalizedContext = normalizedCanvas.getContext("2d", {
+    willReadFrequently: true,
+  });
+  if (!normalizedContext) {
+    bandCanvas.width = 1;
+    bandCanvas.height = 1;
+    return null;
+  }
+
+  normalizedContext.fillStyle = "#ffffff";
+  normalizedContext.fillRect(
+    0,
+    0,
+    normalizedCanvas.width,
+    normalizedCanvas.height,
+  );
+  normalizedContext.imageSmoothingEnabled = true;
+  normalizedContext.imageSmoothingQuality = "high";
+  normalizedContext.drawImage(
+    bandCanvas,
+    bounds.minimumX,
+    bounds.minimumY,
+    bounds.maximumX - bounds.minimumX + 1,
+    bounds.maximumY - bounds.minimumY + 1,
+    0,
+    0,
+    normalizedCanvas.width,
+    normalizedCanvas.height,
+  );
+
+  const normalizedPixels = normalizedContext.getImageData(
+    0,
+    0,
+    normalizedCanvas.width,
+    normalizedCanvas.height,
+  ).data;
+  const fingerprint = new Uint8Array(
+    normalizedCanvas.width * normalizedCanvas.height,
+  );
+
+  for (let index = 0; index < fingerprint.length; index += 1) {
+    const offset = index * 4;
+    const luminance =
+      (normalizedPixels[offset] * 77 +
+        normalizedPixels[offset + 1] * 150 +
+        normalizedPixels[offset + 2] * 29) >>
+      8;
+    fingerprint[index] = 255 - luminance;
+  }
+
+  bandCanvas.width = 1;
+  bandCanvas.height = 1;
+  normalizedCanvas.width = 1;
+  normalizedCanvas.height = 1;
+  return fingerprint;
+}
+
+function axisFingerprintDistance(first: Uint8Array, second: Uint8Array) {
+  if (first.length !== second.length || first.length === 0) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  let difference = 0;
+  for (let index = 0; index < first.length; index += 1) {
+    difference += Math.abs(first[index] - second[index]);
+  }
+  return difference / (first.length * 255);
+}
+
+function compareAxisFingerprints(
+  first: AxisFingerprint,
+  second: AxisFingerprint,
+) {
+  const x = axisFingerprintDistance(first.x, second.x);
+  const y = axisFingerprintDistance(first.y, second.y);
+  return {
+    x,
+    y,
+    matches:
+      x <= AXIS_FINGERPRINT_THRESHOLD &&
+      y <= AXIS_FINGERPRINT_THRESHOLD,
+  };
+}
+
+async function getPlotImageData(
+  page: PDFPageProxy,
+  detectedPlot: DetectedPlot,
+) {
+  if (detectedPlot.inlineImage) {
+    return detectedPlot.inlineImage;
+  }
+  if (!detectedPlot.imageObjectId) {
+    return null;
+  }
+
+  if (page.objs.has(detectedPlot.imageObjectId)) {
+    return page.objs.get(detectedPlot.imageObjectId) as PdfImageData;
+  }
+
+  return new Promise<PdfImageData | null>((resolve) => {
+    page.objs.get(
+      detectedPlot.imageObjectId as string,
+      (imageData: PdfImageData | null) => resolve(imageData),
+    );
+  });
+}
+
+function imageDataCanvas(
+  image: PdfImageData,
+  pdfjs: PdfJsModule,
+) {
+  if (!image.width || !image.height) {
+    return null;
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = image.width;
+  canvas.height = image.height;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    return null;
+  }
+
+  if (image.bitmap) {
+    context.drawImage(image.bitmap, 0, 0, image.width, image.height);
+    return canvas;
+  }
+  if (!image.data) {
+    return null;
+  }
+
+  const canvasPixels = context.createImageData(image.width, image.height);
+  if (image.kind === pdfjs.ImageKind.RGBA_32BPP) {
+    canvasPixels.data.set(image.data);
+  } else if (image.kind === pdfjs.ImageKind.RGB_24BPP) {
+    for (
+      let sourceOffset = 0, targetOffset = 0;
+      sourceOffset < image.data.length;
+      sourceOffset += 3, targetOffset += 4
+    ) {
+      canvasPixels.data[targetOffset] = image.data[sourceOffset];
+      canvasPixels.data[targetOffset + 1] = image.data[sourceOffset + 1];
+      canvasPixels.data[targetOffset + 2] = image.data[sourceOffset + 2];
+      canvasPixels.data[targetOffset + 3] = 255;
+    }
+  } else {
+    return null;
+  }
+
+  context.putImageData(canvasPixels, 0, 0);
+  return canvas;
+}
+
 function cropPlot(
   pageCanvas: HTMLCanvasElement,
   box: PlotBox,
   scale: number,
+  axisSourceCanvas?: HTMLCanvasElement | null,
 ) {
   const sourceX = Math.max(0, Math.floor((box.x - 2) * scale));
   const sourceY = Math.max(0, Math.floor((box.y - 1) * scale));
@@ -690,7 +1048,23 @@ function cropPlot(
     sourceHeight,
   );
 
-  return cropCanvas.toDataURL("image/jpeg", 0.9);
+  const fingerprintCanvas = axisSourceCanvas ?? cropCanvas;
+  let xFingerprint = makeAxisBandFingerprint(fingerprintCanvas, "x");
+  let yFingerprint = makeAxisBandFingerprint(fingerprintCanvas, "y");
+  if (axisSourceCanvas && (!xFingerprint || !yFingerprint)) {
+    xFingerprint = makeAxisBandFingerprint(cropCanvas, "x");
+    yFingerprint = makeAxisBandFingerprint(cropCanvas, "y");
+  }
+  const result = {
+    imageUrl: cropCanvas.toDataURL("image/jpeg", 0.9),
+    axisFingerprint:
+      xFingerprint && yFingerprint
+        ? { x: xFingerprint, y: yFingerprint }
+        : null,
+  };
+  cropCanvas.width = 1;
+  cropCanvas.height = 1;
+  return result;
 }
 
 export async function parseNovoExpressReport(
@@ -717,6 +1091,7 @@ export async function parseNovoExpressReport(
   const documentProxy = await loadingTask.promise;
   const pageCount = documentProxy.numPages;
   const allStats = new Map<string, { sampleName: string; rows: StatsRow[] }>();
+  const axisFingerprints = new Map<number, AxisFingerprint>();
   const rawPlots: RawPlot[] = [];
   let pendingPlots: PendingPlot[] = [];
   let reportTitle = file.name.replace(/\.pdf$/i, "");
@@ -825,6 +1200,7 @@ export async function parseNovoExpressReport(
           outputGates[0] ??
           matchedStats?.gateName ??
           normalizedStructure?.gateNames.at(-1),
+        hasNativeOutputGate: outputGates.length > 0,
         isCompensation: pendingPlot.isCompensation,
       });
     }
@@ -867,7 +1243,8 @@ export async function parseNovoExpressReport(
       });
     }
 
-    const boxes = extractPlotBoxes(page, operatorList, pdfjs);
+    const detectedPlots = extractPlotBoxes(page, operatorList, pdfjs);
+    const boxes = detectedPlots.map((detectedPlot) => detectedPlot.box);
     const pagePlotEvents: Array<{
       type: "plot";
       y: number;
@@ -875,14 +1252,32 @@ export async function parseNovoExpressReport(
     }> = [];
     let pageCanvas: HTMLCanvasElement | null = null;
 
-    if (boxes.length > 0) {
+    if (detectedPlots.length > 0) {
       const renderViewport = page.getViewport({ scale: RENDER_SCALE });
       pageCanvas = document.createElement("canvas");
       pageCanvas.width = Math.ceil(renderViewport.width);
       pageCanvas.height = Math.ceil(renderViewport.height);
       await page.render({ canvas: pageCanvas, viewport: renderViewport }).promise;
 
-      for (const box of boxes) {
+      for (const detectedPlot of detectedPlots) {
+        const { box } = detectedPlot;
+        const sourceImage = await getPlotImageData(page, detectedPlot);
+        const axisSourceCanvas = sourceImage
+          ? imageDataCanvas(sourceImage, pdfjs)
+          : null;
+        const croppedPlot = cropPlot(
+          pageCanvas,
+          box,
+          RENDER_SCALE,
+          axisSourceCanvas,
+        );
+        if (axisSourceCanvas) {
+          axisSourceCanvas.width = 1;
+          axisSourceCanvas.height = 1;
+        }
+        if (croppedPlot.axisFingerprint) {
+          axisFingerprints.set(documentIndex, croppedPlot.axisFingerprint);
+        }
         pagePlotEvents.push({
           type: "plot",
           y: box.y,
@@ -891,7 +1286,7 @@ export async function parseNovoExpressReport(
             documentIndex,
             pageNumber,
             title: getPlotTitle(box, rows),
-            imageUrl: cropPlot(pageCanvas, box, RENDER_SCALE),
+            imageUrl: croppedPlot.imageUrl,
             structure: extractPlotStructure(box, boxes, rows),
             isCompensation: false,
           },
@@ -969,7 +1364,7 @@ export async function parseNovoExpressReport(
 
   const parsedPlots: ParsedPlot[] = [];
   let usedNativeStructure = false;
-  let usedPositionalFallback = false;
+  let usedStatsFallback = false;
   const unmatchedStatsSamples: string[] = [];
   for (const [, samplePlots] of plotsBySample) {
     const orderedPlots = samplePlots.sort(
@@ -986,24 +1381,18 @@ export async function parseNovoExpressReport(
       !orderedPlots.every((plot) => plot.isCompensation) &&
       statsMismatch;
     usedNativeStructure ||= usesNativeStructure;
-    usedPositionalFallback ||= needsPositionalFallback;
+    usedStatsFallback ||= needsPositionalFallback;
 
     if (!sampleStats) {
       unmatchedStatsSamples.push(orderedPlots[0].sampleName);
     } else if (needsPositionalFallback) {
       warnings.push(
-        `${orderedPlots[0].sampleName} has ${orderedPlots.length} plots but ${sampleStats.rows.length} statistics rows. Review its grouping.`,
+        `${orderedPlots[0].sampleName} has ${orderedPlots.length} plots but ${sampleStats.rows.length} statistics rows. Review its gate labels.`,
       );
     }
 
     orderedPlots.forEach((plot, indexInSample) => {
-      const compensationKey = plot.isCompensation
-        ? `compensation::${plot.sampleKey}::${indexInSample}`
-        : undefined;
-      const layoutFallbackKey = compensationKey ?? plot.fallbackGroupKey ?? (
-        statsMismatch ? `position-layout-${orderedPlots.length}-${indexInSample}` : undefined
-      );
-      const statsRow = layoutFallbackKey
+      const statsRow = statsMismatch
         ? undefined
         : sampleStats?.rows[indexInSample];
       const axisX = statsRow?.axisX || "Embedded in plot image";
@@ -1014,14 +1403,10 @@ export async function parseNovoExpressReport(
         (plot.isCompensation
           ? "Not listed"
           : `Plot position ${indexInSample + 1}`);
-      const groupLabel = plot.isCompensation
-        ? `${plot.sampleName}, plot ${indexInSample + 1}`
-        : plot.fallbackGroupLabel ?? (
-        statsRow ? `${axisX} vs ${axisY}` : `Plot ${indexInSample + 1}`
-      );
-      const groupKey = layoutFallbackKey ?? [plot.parentPath, axisX, axisY]
-        .map((value) => normalizeText(value).toLocaleLowerCase())
-        .join("::");
+      const hasTextAxes = Boolean(statsRow?.axisX && statsRow.axisY);
+      const groupLabel = hasTextAxes
+        ? `${axisX} vs ${axisY}`
+        : plot.fallbackGroupLabel ?? `Plot ${indexInSample + 1}`;
 
       parsedPlots.push({
         ...plot,
@@ -1029,65 +1414,233 @@ export async function parseNovoExpressReport(
         axisX,
         axisY,
         gateName,
-        groupKey,
+        groupKey: "",
         groupLabel,
         indexInSample,
       });
     });
   }
 
-  const groupMap = new Map<string, PlotGroup>();
-  for (const plot of parsedPlots.sort(
+  type AxisGroupResolution = {
+    key: string;
+    label: string;
+    labelConfidence: number;
+    axisX: string;
+    axisY: string;
+    fingerprints: AxisFingerprint[];
+    plots: ParsedPlot[];
+  };
+
+  const orderedParsedPlots = parsedPlots.sort(
     (a, b) => a.documentIndex - b.documentIndex,
-  )) {
-    const group = groupMap.get(plot.groupKey) ?? {
-      key: plot.groupKey,
+  );
+  const axisGroups: AxisGroupResolution[] = [];
+  const textAxisGroups = new Map<string, AxisGroupResolution>();
+  let imageGroupIndex = 0;
+  let usedAxisFallback = false;
+
+  const hasTextAxes = (plot: ParsedPlot) =>
+    plot.axisX !== "Embedded in plot image" &&
+    plot.axisY !== "Embedded in plot image";
+
+  const inferredAxes = (plot: ParsedPlot) => {
+    if (!plot.hasNativeOutputGate) {
+      return {
+        label: plot.groupLabel,
+        axisX: plot.axisX,
+        axisY: plot.axisY,
+        confidence: 1,
+      };
+    }
+    const gateKey = canonicalGate(plot.nativeGateName ?? plot.gateName);
+    const parentKey = canonicalGate(plot.parentPath);
+    if (
+      (gateKey === "cells" || gateKey === "e1") &&
+      parentKey === "allevents"
+    ) {
+      return {
+        label: "FSC-H vs SSC-H",
+        axisX: "FSC-H",
+        axisY: "SSC-H",
+        confidence: 2,
+      };
+    }
+    if (
+      (gateKey === "singlets" && parentKey.includes("cells")) ||
+      (gateKey === "p2" && parentKey.includes("e1"))
+    ) {
+      return {
+        label: "FSC-H vs FSC-A",
+        axisX: "FSC-H",
+        axisY: "FSC-A",
+        confidence: 2,
+      };
+    }
+    return {
       label: plot.groupLabel,
-      parentPath: plot.parentPath,
       axisX: plot.axisX,
       axisY: plot.axisY,
+      confidence: 1,
+    };
+  };
+
+  const applyGroupDetails = (
+    plot: ParsedPlot,
+    group: AxisGroupResolution,
+  ) => {
+    plot.groupKey = group.key;
+    plot.groupLabel = group.label;
+    plot.axisX = group.axisX;
+    plot.axisY = group.axisY;
+  };
+
+  const addFingerprint = (
+    group: AxisGroupResolution,
+    fingerprint: AxisFingerprint | undefined,
+  ) => {
+    if (!fingerprint || group.fingerprints.length >= 6) {
+      return;
+    }
+    const alreadyRepresented = group.fingerprints.some((candidate) => {
+      const comparison = compareAxisFingerprints(candidate, fingerprint);
+      return comparison.x <= 0.01 && comparison.y <= 0.01;
+    });
+    if (!alreadyRepresented) {
+      group.fingerprints.push(fingerprint);
+    }
+  };
+
+  for (const plot of orderedParsedPlots.filter(hasTextAxes)) {
+    const key = `axes-text::${[plot.axisX, plot.axisY]
+      .map((value) => normalizeText(value).toLocaleLowerCase())
+      .join("::")}`;
+    const group = textAxisGroups.get(key) ?? {
+      key,
+      label: `${plot.axisX} vs ${plot.axisY}`,
+      labelConfidence: 3,
+      axisX: plot.axisX,
+      axisY: plot.axisY,
+      fingerprints: [],
       plots: [],
     };
+    applyGroupDetails(plot, group);
     group.plots.push(plot);
-    groupMap.set(plot.groupKey, group);
+    addFingerprint(group, axisFingerprints.get(plot.documentIndex));
+    if (!textAxisGroups.has(key)) {
+      textAxisGroups.set(key, group);
+      axisGroups.push(group);
+    }
   }
 
-  const groups = [...groupMap.values()];
+  for (const plot of orderedParsedPlots.filter((candidate) => !hasTextAxes(candidate))) {
+    const fingerprint = axisFingerprints.get(plot.documentIndex);
+    let bestMatch:
+      | {
+          score: number;
+          group: AxisGroupResolution;
+        }
+      | undefined;
+
+    if (fingerprint) {
+      for (const group of axisGroups) {
+        for (const candidate of group.fingerprints) {
+          const comparison = compareAxisFingerprints(candidate, fingerprint);
+          if (!comparison.matches) {
+            continue;
+          }
+          const score = Math.max(comparison.x, comparison.y);
+          if (!bestMatch || score < bestMatch.score) {
+            bestMatch = { score, group };
+          }
+        }
+      }
+    }
+
+    let group = bestMatch?.group;
+    if (!group) {
+      const fallbackKey = fingerprint
+        ? `axes-image::${imageGroupIndex}`
+        : `axes-fallback::${
+            plot.fallbackGroupKey ??
+            `position-${plot.indexInSample + 1}`
+          }`;
+      group = axisGroups.find((candidate) => candidate.key === fallbackKey);
+      if (!group) {
+        const details = inferredAxes(plot);
+        group = {
+          key: fallbackKey,
+          label:
+            fingerprint && details.confidence === 1
+              ? `Axis pair ${imageGroupIndex + 1}`
+              : details.label,
+          labelConfidence: details.confidence,
+          axisX: details.axisX,
+          axisY: details.axisY,
+          fingerprints: [],
+          plots: [],
+        };
+        axisGroups.push(group);
+        if (fingerprint) {
+          imageGroupIndex += 1;
+        } else {
+          usedAxisFallback = true;
+        }
+      }
+    }
+
+    const details = inferredAxes(plot);
+    if (details.confidence > group.labelConfidence) {
+      group.label = details.label;
+      group.labelConfidence = details.confidence;
+      group.axisX = details.axisX;
+      group.axisY = details.axisY;
+      for (const groupedPlot of group.plots) {
+        applyGroupDetails(groupedPlot, group);
+      }
+    }
+
+    applyGroupDetails(plot, group);
+    group.plots.push(plot);
+    addFingerprint(group, fingerprint);
+  }
+
+  const groups = axisGroups
+    .filter((group) => group.plots.length > 0)
+    .sort(
+      (a, b) =>
+        a.plots[0].documentIndex - b.plots[0].documentIndex,
+    )
+    .map((group): PlotGroup => ({
+      key: group.key,
+      label: group.label,
+      parentPaths: [
+        ...new Set(group.plots.map((plot) => plot.parentPath)),
+      ],
+      axisX: group.axisX,
+      axisY: group.axisY,
+      plots: group.plots,
+    }));
+
   if (unmatchedStatsSamples.length > 0) {
     const examples = unmatchedStatsSamples.slice(0, 3).join(", ");
     warnings.push(
-      `${unmatchedStatsSamples.length} sample layout${unmatchedStatsSamples.length === 1 ? "" : "s"} had no matching statistics table${examples ? ` (for example: ${examples})` : ""}. Those plots use positional grouping.`,
+      `${unmatchedStatsSamples.length} sample layout${unmatchedStatsSamples.length === 1 ? "" : "s"} had no matching statistics table${examples ? ` (for example: ${examples})` : ""}. Review their gate labels.`,
     );
   }
   if (usedNativeStructure) {
     warnings.unshift(
-      "This report stores axis captions inside the plot images. Matching uses the selectable input-population and gate-table structure; compensation controls stay separate.",
+      "Some axis captions are image-only. They are matched locally by their printed X/Y label shapes, without OCR; unidentified pairs use numbered labels.",
     );
   }
-  if (usedPositionalFallback) {
+  if (usedStatsFallback) {
     warnings.push(
-      "Some plots did not expose enough table structure for gate-based matching, so those plots use their position within the sample layout. Review those groups before export.",
+      "Some plots did not have matching statistics rows, so their gate labels may use plot position. Axis grouping still uses the labels printed in each plot.",
     );
   }
-  const pathsByAxes = new Map<string, Set<string>>();
-  for (const group of groups) {
-    const axisKey = `${group.axisX.toLocaleLowerCase()}::${group.axisY.toLocaleLowerCase()}`;
-    const paths = pathsByAxes.get(axisKey) ?? new Set<string>();
-    paths.add(group.parentPath);
-    pathsByAxes.set(axisKey, paths);
-  }
-  for (const [axisKey, paths] of pathsByAxes) {
-    if (
-      paths.size > 1 &&
-      !axisKey.includes("unknown") &&
-      !axisKey.includes("rasterized") &&
-      !axisKey.includes("embedded")
-    ) {
-      const [axisX, axisY] = axisKey.split("::");
-      warnings.push(
-        `${axisX} vs ${axisY} appears under ${paths.size} parent populations, so those plots remain in separate groups.`,
-      );
-    }
+  if (usedAxisFallback) {
+    warnings.push(
+      "Some plots did not expose a reliable X/Y label image, so those plots use their report layout as a fallback. Review those groups before export.",
+    );
   }
 
   const sampleNames = [...plotsBySample.values()]

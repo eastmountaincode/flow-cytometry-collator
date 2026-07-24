@@ -1,4 +1,5 @@
 import type { ParsedReport } from "@/lib/novoexpress-parser";
+import { formatInputPopulations } from "@/lib/report-labels";
 
 export async function exportCollatedPdf(
   report: ParsedReport,
@@ -43,9 +44,14 @@ export async function exportCollatedPdf(
       pdf.setFont("helvetica", "normal");
       pdf.setFontSize(9);
       pdf.setTextColor(76, 94, 108);
-      pdf.text(`Parent population: ${group.parentPath}`, margin, margin + 31);
       pdf.text(
-        `Samples: ${group.plots.length}, page ${part} of ${partCount}`,
+        `Input population${group.parentPaths.length === 1 ? "" : "s"}: ${formatInputPopulations(group.parentPaths, 2)}`,
+        margin,
+        margin + 31,
+        { maxWidth: availableWidth * 0.72 },
+      );
+      pdf.text(
+        `Plots: ${group.plots.length}, page ${part} of ${partCount}`,
         pageWidth - margin,
         margin + 14,
         { align: "right" },

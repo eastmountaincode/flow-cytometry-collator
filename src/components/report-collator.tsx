@@ -11,6 +11,7 @@ import {
   type ParsedReport,
   type ParseProgress,
 } from "@/lib/novoexpress-parser";
+import { formatInputPopulations } from "@/lib/report-labels";
 
 const initialProgress: ParseProgress = {
   currentPage: 0,
@@ -431,11 +432,12 @@ export function ReportCollator() {
                         </dd>
                       </div>
                       <div>
-                        <dt>Input population</dt>
-                        <dd>
-                          {group.parentPath === "All events"
-                            ? "All collected events"
-                            : group.parentPath}
+                        <dt>
+                          Input population
+                          {group.parentPaths.length === 1 ? "" : "s"}
+                        </dt>
+                        <dd title={formatInputPopulations(group.parentPaths)}>
+                          {formatInputPopulations(group.parentPaths, 3)}
                         </dd>
                       </div>
                     </dl>

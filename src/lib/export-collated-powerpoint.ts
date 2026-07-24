@@ -1,4 +1,5 @@
 import type { ParsedPlot, ParsedReport } from "@/lib/novoexpress-parser";
+import { formatInputPopulations } from "@/lib/report-labels";
 
 const SLIDE_WIDTH = 13.333;
 const SLIDE_HEIGHT = 7.5;
@@ -60,8 +61,8 @@ export async function exportCollatedPowerpoint(report: ParsedReport) {
     ) {
       const slide = presentation.addSlide();
       const pagePlots = group.plots.slice(start, start + PLOTS_PER_SLIDE);
-      const firstSample = start + 1;
-      const lastSample = start + pagePlots.length;
+      const firstPlot = start + 1;
+      const lastPlot = start + pagePlots.length;
       slideNumber += 1;
       slide.background = { color: "FFFFFF" };
 
@@ -78,11 +79,7 @@ export async function exportCollatedPowerpoint(report: ParsedReport) {
         breakLine: false,
       });
       slide.addText(
-        `Input population: ${
-          group.parentPath === "All events"
-            ? "All collected events"
-            : group.parentPath
-        }`,
+        `Input population${group.parentPaths.length === 1 ? "" : "s"}: ${formatInputPopulations(group.parentPaths, 2)}`,
         {
           x: marginX,
           y: 0.84,
@@ -96,7 +93,7 @@ export async function exportCollatedPowerpoint(report: ParsedReport) {
         },
       );
       slide.addText(
-        `Samples ${firstSample}–${lastSample} of ${group.plots.length}`,
+        `Plots ${firstPlot}–${lastPlot} of ${group.plots.length}`,
         {
           x: 10.05,
           y: 0.84,
