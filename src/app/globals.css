@@ -393,9 +393,7 @@ progress {
 }
 
 .plot-grid figcaption .plot-caption__sample dd {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .plot-grid figcaption div:not(.plot-caption__sample) {
