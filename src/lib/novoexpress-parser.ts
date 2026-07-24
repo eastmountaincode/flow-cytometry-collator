@@ -1,13 +1,18 @@
 import type { PDFPageProxy } from "pdfjs-dist/legacy/build/pdf.mjs";
+import { AXIS_LABEL_TEMPLATE_SETS } from "./axis-label-templates.generated";
 
 const PARSE_SCALE = 1;
 const RENDER_SCALE = 2.4;
 const MAX_FILE_BYTES = 300 * 1024 * 1024;
 const AXIS_FINGERPRINT_WIDTH = 64;
 const AXIS_FINGERPRINT_HEIGHT = 16;
-// Across the current 1,421-plot fixture set, matching captions stay below
-// 0.012 distance and different captions stay above 0.179.
+const AXIS_LABEL_MATCH_MARGIN = 0.03;
+// Across the current 2,842-axis fixture audit, template matches stay below
+// 0.024 distance and the nearest wrong label stays above 0.127.
 const AXIS_FINGERPRINT_THRESHOLD = 0.075;
+const FINGERPRINT_FIXED_POINT = 65_536;
+const FINGERPRINT_FIXED_POINT_SQUARED =
+  FINGERPRINT_FIXED_POINT * FINGERPRINT_FIXED_POINT;
 
 type Matrix = [number, number, number, number, number, number];
 
@@ -46,6 +51,12 @@ type DetectedPlot = {
 type AxisFingerprint = {
   x: Uint8Array;
   y: Uint8Array;
+};
+
+type PixelBuffer = {
+  width: number;
+  height: number;
+  data: Uint8ClampedArray;
 };
 
 type StatsRow = {
@@ -89,14 +100,14 @@ type RawPlot = {
   imageUrl: string;
   fallbackGroupKey?: string;
   fallbackGroupLabel?: string;
-  nativeGateName?: string;
-  hasNativeOutputGate: boolean;
+  nativeOutputGateNames: string[] | null;
+  fallbackGateName?: string;
   isCompensation: boolean;
 };
 
 export type ParsedPlot = RawPlot & {
   id: string;
-  gateName: string;
+  displayedGateNames: string[];
   axisX: string;
   axisY: string;
   groupKey: string;
@@ -699,6 +710,11 @@ function makeAxisBandFingerprint(
   cropCanvas: HTMLCanvasElement,
   axis: "x" | "y",
 ) {
+  const context = cropCanvas.getContext("2d", { willReadFrequently: true });
+  if (!context) {
+    return null;
+  }
+
   // NovoExpress raster plots place the X caption in the bottom strip and the
   // rotated Y caption in the left strip of the embedded plot image.
   const horizontal = axis === "x";
@@ -718,63 +734,48 @@ function makeAxisBandFingerprint(
   );
   const sourceWidth = Math.min(bandWidth, cropCanvas.width - bandX);
   const sourceHeight = Math.min(bandHeight, cropCanvas.height - bandY);
-  const bandCanvas = document.createElement("canvas");
-  bandCanvas.width = horizontal ? sourceWidth : sourceHeight;
-  bandCanvas.height = horizontal ? sourceHeight : sourceWidth;
-  const bandContext = bandCanvas.getContext("2d", {
-    willReadFrequently: true,
-  });
-  if (!bandContext) {
-    return null;
-  }
-
-  bandContext.fillStyle = "#ffffff";
-  bandContext.fillRect(0, 0, bandCanvas.width, bandCanvas.height);
-  if (horizontal) {
-    bandContext.drawImage(
-      cropCanvas,
-      bandX,
-      bandY,
-      sourceWidth,
-      sourceHeight,
-      0,
-      0,
-      sourceWidth,
-      sourceHeight,
-    );
-  } else {
-    bandContext.translate(sourceHeight, 0);
-    bandContext.rotate(Math.PI / 2);
-    bandContext.drawImage(
-      cropCanvas,
-      bandX,
-      bandY,
-      sourceWidth,
-      sourceHeight,
-      0,
-      0,
-      sourceWidth,
-      sourceHeight,
-    );
-    bandContext.setTransform(1, 0, 0, 1, 0, 0);
-  }
-
-  const pixels = bandContext.getImageData(
-    0,
-    0,
-    bandCanvas.width,
-    bandCanvas.height,
+  const sourcePixels = context.getImageData(
+    bandX,
+    bandY,
+    sourceWidth,
+    sourceHeight,
   );
+  const pixels: PixelBuffer = horizontal
+    ? sourcePixels
+    : (() => {
+        const rotated: PixelBuffer = {
+          width: sourceHeight,
+          height: sourceWidth,
+          data: new Uint8ClampedArray(sourceWidth * sourceHeight * 4),
+        };
+        for (let y = 0; y < sourceHeight; y += 1) {
+          for (let x = 0; x < sourceWidth; x += 1) {
+            const sourceOffset = (y * sourceWidth + x) * 4;
+            const targetX = sourceHeight - y - 1;
+            const targetY = x;
+            const targetOffset = (targetY * rotated.width + targetX) * 4;
+            rotated.data[targetOffset] = sourcePixels.data[sourceOffset];
+            rotated.data[targetOffset + 1] =
+              sourcePixels.data[sourceOffset + 1];
+            rotated.data[targetOffset + 2] =
+              sourcePixels.data[sourceOffset + 2];
+            rotated.data[targetOffset + 3] =
+              sourcePixels.data[sourceOffset + 3];
+          }
+        }
+        return rotated;
+      })();
 
-  const isInk = (x: number, y: number) => {
+  const luminanceAt = (x: number, y: number) => {
     const offset = (y * pixels.width + x) * 4;
-    const luminance =
+    return (
       (pixels.data[offset] * 77 +
         pixels.data[offset + 1] * 150 +
         pixels.data[offset + 2] * 29) >>
-      8;
-    return luminance < 190;
+      8
+    );
   };
+  const isInk = (x: number, y: number) => luminanceAt(x, y) < 190;
 
   const findInkBounds = (maximumAllowedX = pixels.width - 1) => {
     let minimumX = pixels.width;
@@ -808,8 +809,6 @@ function makeAxisBandFingerprint(
 
   let bounds = findInkBounds();
   if (!bounds) {
-    bandCanvas.width = 1;
-    bandCanvas.height = 1;
     return null;
   }
 
@@ -853,63 +852,89 @@ function makeAxisBandFingerprint(
     }
   }
 
-  const normalizedCanvas = document.createElement("canvas");
-  normalizedCanvas.width = AXIS_FINGERPRINT_WIDTH;
-  normalizedCanvas.height = AXIS_FINGERPRINT_HEIGHT;
-  const normalizedContext = normalizedCanvas.getContext("2d", {
-    willReadFrequently: true,
-  });
-  if (!normalizedContext) {
-    bandCanvas.width = 1;
-    bandCanvas.height = 1;
-    return null;
-  }
-
-  normalizedContext.fillStyle = "#ffffff";
-  normalizedContext.fillRect(
-    0,
-    0,
-    normalizedCanvas.width,
-    normalizedCanvas.height,
-  );
-  normalizedContext.imageSmoothingEnabled = true;
-  normalizedContext.imageSmoothingQuality = "high";
-  normalizedContext.drawImage(
-    bandCanvas,
-    bounds.minimumX,
-    bounds.minimumY,
-    bounds.maximumX - bounds.minimumX + 1,
-    bounds.maximumY - bounds.minimumY + 1,
-    0,
-    0,
-    normalizedCanvas.width,
-    normalizedCanvas.height,
-  );
-
-  const normalizedPixels = normalizedContext.getImageData(
-    0,
-    0,
-    normalizedCanvas.width,
-    normalizedCanvas.height,
-  ).data;
   const fingerprint = new Uint8Array(
-    normalizedCanvas.width * normalizedCanvas.height,
+    AXIS_FINGERPRINT_WIDTH * AXIS_FINGERPRINT_HEIGHT,
   );
+  const fingerprintSourceWidth = bounds.maximumX - bounds.minimumX + 1;
+  const fingerprintSourceHeight = bounds.maximumY - bounds.minimumY + 1;
 
-  for (let index = 0; index < fingerprint.length; index += 1) {
-    const offset = index * 4;
-    const luminance =
-      (normalizedPixels[offset] * 77 +
-        normalizedPixels[offset + 1] * 150 +
-        normalizedPixels[offset + 2] * 29) >>
-      8;
-    fingerprint[index] = 255 - luminance;
+  for (let outputY = 0; outputY < AXIS_FINGERPRINT_HEIGHT; outputY += 1) {
+    const rawSourceY = Math.floor(
+      (
+        ((outputY * 2 + 1) *
+          fingerprintSourceHeight *
+          FINGERPRINT_FIXED_POINT) /
+        (AXIS_FINGERPRINT_HEIGHT * 2)
+      ) - FINGERPRINT_FIXED_POINT / 2,
+    );
+    const sourceYFixed = Math.max(
+      0,
+      Math.min(
+        (fingerprintSourceHeight - 1) * FINGERPRINT_FIXED_POINT,
+        rawSourceY,
+      ),
+    );
+    const sourceY = Math.floor(sourceYFixed / FINGERPRINT_FIXED_POINT);
+    const nextSourceY = Math.min(
+      fingerprintSourceHeight - 1,
+      sourceY + 1,
+    );
+    const yWeight = sourceYFixed - sourceY * FINGERPRINT_FIXED_POINT;
+
+    for (let outputX = 0; outputX < AXIS_FINGERPRINT_WIDTH; outputX += 1) {
+      const rawSourceX = Math.floor(
+        (
+          ((outputX * 2 + 1) *
+            fingerprintSourceWidth *
+            FINGERPRINT_FIXED_POINT) /
+          (AXIS_FINGERPRINT_WIDTH * 2)
+        ) - FINGERPRINT_FIXED_POINT / 2,
+      );
+      const sourceXFixed = Math.max(
+        0,
+        Math.min(
+          (fingerprintSourceWidth - 1) * FINGERPRINT_FIXED_POINT,
+          rawSourceX,
+        ),
+      );
+      const sourceX = Math.floor(sourceXFixed / FINGERPRINT_FIXED_POINT);
+      const nextSourceX = Math.min(
+        fingerprintSourceWidth - 1,
+        sourceX + 1,
+      );
+      const xWeight = sourceXFixed - sourceX * FINGERPRINT_FIXED_POINT;
+      const top =
+        luminanceAt(bounds.minimumX + sourceX, bounds.minimumY + sourceY) *
+          (FINGERPRINT_FIXED_POINT - xWeight) +
+        luminanceAt(
+          bounds.minimumX + nextSourceX,
+          bounds.minimumY + sourceY,
+        ) *
+          xWeight;
+      const bottom =
+        luminanceAt(
+          bounds.minimumX + sourceX,
+          bounds.minimumY + nextSourceY,
+        ) *
+          (FINGERPRINT_FIXED_POINT - xWeight) +
+        luminanceAt(
+          bounds.minimumX + nextSourceX,
+          bounds.minimumY + nextSourceY,
+        ) *
+          xWeight;
+      const luminance = Math.floor(
+        (
+          top * (FINGERPRINT_FIXED_POINT - yWeight) +
+          bottom * yWeight +
+          FINGERPRINT_FIXED_POINT_SQUARED / 2
+        ) / FINGERPRINT_FIXED_POINT_SQUARED,
+      );
+      fingerprint[
+        outputY * AXIS_FINGERPRINT_WIDTH + outputX
+      ] = 255 - luminance;
+    }
   }
 
-  bandCanvas.width = 1;
-  bandCanvas.height = 1;
-  normalizedCanvas.width = 1;
-  normalizedCanvas.height = 1;
   return fingerprint;
 }
 
@@ -938,6 +963,85 @@ function compareAxisFingerprints(
       x <= AXIS_FINGERPRINT_THRESHOLD &&
       y <= AXIS_FINGERPRINT_THRESHOLD,
   };
+}
+
+type DecodedAxisLabelTemplateSet = {
+  label: string;
+  fingerprints: Uint8Array[];
+};
+
+let decodedAxisLabelTemplateSets:
+  | DecodedAxisLabelTemplateSet[]
+  | null = null;
+
+function getDecodedAxisLabelTemplateSets() {
+  if (decodedAxisLabelTemplateSets) {
+    return decodedAxisLabelTemplateSets;
+  }
+
+  decodedAxisLabelTemplateSets = AXIS_LABEL_TEMPLATE_SETS.map((templateSet) => ({
+    label: templateSet.label,
+    fingerprints: templateSet.fingerprints.map((encoded) => {
+      const binary = atob(encoded);
+      if (
+        binary.length !==
+        (AXIS_FINGERPRINT_WIDTH * AXIS_FINGERPRINT_HEIGHT) / 2
+      ) {
+        throw new Error(
+          `Axis template "${templateSet.label}" has an invalid fingerprint.`,
+        );
+      }
+      const fingerprint = new Uint8Array(binary.length * 2);
+      for (let index = 0; index < binary.length; index += 1) {
+        const packed = binary.charCodeAt(index);
+        fingerprint[index * 2] = (packed >> 4) * 17;
+        fingerprint[index * 2 + 1] = (packed & 0x0f) * 17;
+      }
+      return fingerprint;
+    }),
+  }));
+  return decodedAxisLabelTemplateSets;
+}
+
+function identifyAxisLabel(
+  fingerprints: AxisFingerprint[],
+  axis: "x" | "y",
+) {
+  if (fingerprints.length === 0) {
+    return null;
+  }
+
+  const scores = getDecodedAxisLabelTemplateSets()
+    .map((templateSet) => ({
+      label: templateSet.label,
+      // Every representative in the group must be explained by the same
+      // printed label. This prevents one unusually close plot from naming an
+      // otherwise unknown group.
+      distance: Math.max(
+        ...fingerprints.map((fingerprint) =>
+          Math.min(
+            ...templateSet.fingerprints.map((template) =>
+              axisFingerprintDistance(fingerprint[axis], template),
+            ),
+          ),
+        ),
+      ),
+    }))
+    .sort((first, second) => first.distance - second.distance);
+  const best = scores[0];
+  const nextBest = scores[1];
+  if (
+    !best ||
+    best.distance > AXIS_FINGERPRINT_THRESHOLD ||
+    (
+      nextBest &&
+      nextBest.distance - best.distance < AXIS_LABEL_MATCH_MARGIN
+    )
+  ) {
+    return null;
+  }
+
+  return best;
 }
 
 async function getPlotImageData(
@@ -1196,11 +1300,14 @@ export async function parseNovoExpressReport(
         imageUrl: pendingPlot.imageUrl,
         fallbackGroupKey,
         fallbackGroupLabel,
-        nativeGateName:
-          outputGates[0] ??
-          matchedStats?.gateName ??
-          normalizedStructure?.gateNames.at(-1),
-        hasNativeOutputGate: outputGates.length > 0,
+        // A native plot table distinguishes "no displayed child gate" from
+        // "gate metadata unavailable." Keep every child gate in report order;
+        // the first item alone is not an adequate description of histograms
+        // or quadrant plots.
+        nativeOutputGateNames: normalizedStructure ? outputGates : null,
+        fallbackGateName: normalizedStructure
+          ? undefined
+          : matchedStats?.gateName,
         isCompensation: pendingPlot.isCompensation,
       });
     }
@@ -1363,7 +1470,6 @@ export async function parseNovoExpressReport(
   }
 
   const parsedPlots: ParsedPlot[] = [];
-  let usedNativeStructure = false;
   let usedStatsFallback = false;
   const unmatchedStatsSamples: string[] = [];
   for (const [, samplePlots] of plotsBySample) {
@@ -1380,7 +1486,6 @@ export async function parseNovoExpressReport(
       !usesNativeStructure &&
       !orderedPlots.every((plot) => plot.isCompensation) &&
       statsMismatch;
-    usedNativeStructure ||= usesNativeStructure;
     usedStatsFallback ||= needsPositionalFallback;
 
     if (!sampleStats) {
@@ -1397,12 +1502,13 @@ export async function parseNovoExpressReport(
         : sampleStats?.rows[indexInSample];
       const axisX = statsRow?.axisX || "Embedded in plot image";
       const axisY = statsRow?.axisY || "Embedded in plot image";
-      const gateName =
-        plot.nativeGateName ??
-        statsRow?.gateName ??
-        (plot.isCompensation
-          ? "Not listed"
-          : `Plot position ${indexInSample + 1}`);
+      const displayedGateNames =
+        plot.nativeOutputGateNames ??
+        (statsRow?.gateName
+          ? [statsRow.gateName]
+          : plot.fallbackGateName
+            ? [plot.fallbackGateName]
+            : []);
       const hasTextAxes = Boolean(statsRow?.axisX && statsRow.axisY);
       const groupLabel = hasTextAxes
         ? `${axisX} vs ${axisY}`
@@ -1413,7 +1519,7 @@ export async function parseNovoExpressReport(
         id: `${plot.pageNumber}-${plot.documentIndex}`,
         axisX,
         axisY,
-        gateName,
+        displayedGateNames,
         groupKey: "",
         groupLabel,
         indexInSample,
@@ -1438,13 +1544,14 @@ export async function parseNovoExpressReport(
   const textAxisGroups = new Map<string, AxisGroupResolution>();
   let imageGroupIndex = 0;
   let usedAxisFallback = false;
+  let usedUnidentifiedAxisLabels = false;
 
   const hasTextAxes = (plot: ParsedPlot) =>
     plot.axisX !== "Embedded in plot image" &&
     plot.axisY !== "Embedded in plot image";
 
   const inferredAxes = (plot: ParsedPlot) => {
-    if (!plot.hasNativeOutputGate) {
+    if (plot.displayedGateNames.length === 0) {
       return {
         label: plot.groupLabel,
         axisX: plot.axisX,
@@ -1452,10 +1559,12 @@ export async function parseNovoExpressReport(
         confidence: 1,
       };
     }
-    const gateKey = canonicalGate(plot.nativeGateName ?? plot.gateName);
+    const gateKeys = new Set(
+      plot.displayedGateNames.map((gateName) => canonicalGate(gateName)),
+    );
     const parentKey = canonicalGate(plot.parentPath);
     if (
-      (gateKey === "cells" || gateKey === "e1") &&
+      (gateKeys.has("cells") || gateKeys.has("e1")) &&
       parentKey === "allevents"
     ) {
       return {
@@ -1466,8 +1575,8 @@ export async function parseNovoExpressReport(
       };
     }
     if (
-      (gateKey === "singlets" && parentKey.includes("cells")) ||
-      (gateKey === "p2" && parentKey.includes("e1"))
+      (gateKeys.has("singlets") && parentKey.includes("cells")) ||
+      (gateKeys.has("p2") && parentKey.includes("e1"))
     ) {
       return {
         label: "FSC-H vs FSC-A",
@@ -1571,7 +1680,7 @@ export async function parseNovoExpressReport(
           key: fallbackKey,
           label:
             fingerprint && details.confidence === 1
-              ? `Axis pair ${imageGroupIndex + 1}`
+              ? "Axis labels unavailable"
               : details.label,
           labelConfidence: details.confidence,
           axisX: details.axisX,
@@ -1604,6 +1713,30 @@ export async function parseNovoExpressReport(
     addFingerprint(group, fingerprint);
   }
 
+  for (const group of axisGroups) {
+    if (
+      group.key.startsWith("axes-text::") ||
+      group.fingerprints.length === 0
+    ) {
+      continue;
+    }
+
+    const identifiedX = identifyAxisLabel(group.fingerprints, "x");
+    const identifiedY = identifyAxisLabel(group.fingerprints, "y");
+    if (!identifiedX || !identifiedY) {
+      usedUnidentifiedAxisLabels = true;
+      continue;
+    }
+
+    group.label = `${identifiedX.label} vs ${identifiedY.label}`;
+    group.labelConfidence = 3;
+    group.axisX = identifiedX.label;
+    group.axisY = identifiedY.label;
+    for (const groupedPlot of group.plots) {
+      applyGroupDetails(groupedPlot, group);
+    }
+  }
+
   const groups = axisGroups
     .filter((group) => group.plots.length > 0)
     .sort(
@@ -1627,9 +1760,9 @@ export async function parseNovoExpressReport(
       `${unmatchedStatsSamples.length} sample layout${unmatchedStatsSamples.length === 1 ? "" : "s"} had no matching statistics table${examples ? ` (for example: ${examples})` : ""}. Review their gate labels.`,
     );
   }
-  if (usedNativeStructure) {
+  if (usedUnidentifiedAxisLabels) {
     warnings.unshift(
-      "Some axis captions are image-only. They are matched locally by their printed X/Y label shapes, without OCR; unidentified pairs use numbered labels.",
+      "Some image-only axis captions could not be identified. They are left unavailable rather than guessed.",
     );
   }
   if (usedStatsFallback) {

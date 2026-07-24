@@ -493,9 +493,22 @@ export function ReportCollator() {
                               <dt>Sample</dt>
                               <dd title={plot.sampleName}>{plot.sampleName}</dd>
                             </div>
-                            <div>
-                              <dt>Gate</dt>
-                              <dd>{plot.gateName}</dd>
+                            <div className="plot-caption__wide">
+                              <dt>Input population</dt>
+                              <dd title={formatInputPopulations([plot.parentPath])}>
+                                {formatInputPopulations([plot.parentPath])}
+                              </dd>
+                            </div>
+                            <div className="plot-caption__wide">
+                              <dt>
+                                Displayed gate
+                                {plot.displayedGateNames.length === 1 ? "" : "s"}
+                              </dt>
+                              <dd>
+                                {plot.displayedGateNames.length > 0
+                                  ? plot.displayedGateNames.join(", ")
+                                  : "None"}
+                              </dd>
                             </div>
                             <div>
                               <dt>Page</dt>

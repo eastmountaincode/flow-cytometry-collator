@@ -378,6 +378,10 @@ progress {
   width: 100%;
 }
 
+.plot-grid figcaption .plot-caption__wide {
+  width: 100%;
+}
+
 .plot-grid figcaption dt {
   flex: 0 0 auto;
   font-weight: 700;

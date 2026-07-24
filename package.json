@@ -3,6 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "axis-templates:check": "node scripts/generate-axis-label-templates.mjs --check",
+    "axis-templates:generate": "node scripts/generate-axis-label-templates.mjs --write",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
