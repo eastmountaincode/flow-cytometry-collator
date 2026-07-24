@@ -450,14 +450,16 @@ export function ReportCollator() {
           <legend>Open a PDF</legend>
           {isParsing ? (
             <div className="parse-progress" aria-live="polite">
-              <label htmlFor="parse-progress">{progress.stage}</label>
-              <progress
-                id="parse-progress"
-                max="100"
-                value={progress.pageCount > 0 ? progress.percent : undefined}
-              />
+              <div>{progress.stage}</div>
               {progress.pageCount > 0 && (
-                <span>Progress: {progress.percent}%</span>
+                <>
+                  <progress
+                    aria-label={progress.stage}
+                    max="100"
+                    value={progress.percent}
+                  />
+                  <span>Progress: {progress.percent}%</span>
+                </>
               )}
             </div>
           ) : (
