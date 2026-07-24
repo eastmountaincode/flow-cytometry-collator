@@ -298,7 +298,7 @@ export function ReportCollator() {
       currentPage: 0,
       pageCount: 0,
       percent: 0,
-      stage: "Uploading report",
+      stage: "Uploading report...",
     });
     setIsParsing(true);
     clearCopyFeedback();
