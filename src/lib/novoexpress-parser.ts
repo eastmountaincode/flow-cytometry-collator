@@ -163,6 +163,7 @@ export type ParserCanvasFactory = (
 
 export type ParserOptions = {
   createCanvas?: ParserCanvasFactory;
+  signal?: AbortSignal;
 };
 
 type PdfJsModule = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
@@ -1200,6 +1201,8 @@ export async function parseNovoExpressReport(
   onProgress: (progress: ParseProgress) => void,
   options: ParserOptions = {},
 ): Promise<ParsedReport> {
+  options.signal?.throwIfAborted();
+
   if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
     throw new Error("Choose a PDF report exported from NovoExpress.");
   }
@@ -1351,6 +1354,8 @@ export async function parseNovoExpressReport(
   });
 
   for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
+    options.signal?.throwIfAborted();
+
     const page = await documentProxy.getPage(pageNumber);
     const [textContent, operatorList] = await Promise.all([
       page.getTextContent(),
@@ -1396,6 +1401,8 @@ export async function parseNovoExpressReport(
       await page.render({ canvas: pageCanvas, viewport: renderViewport }).promise;
 
       for (const detectedPlot of detectedPlots) {
+        options.signal?.throwIfAborted();
+
         const { box } = detectedPlot;
         const sourceImage = await getPlotImageData(page, detectedPlot);
         const axisSourceCanvas = sourceImage

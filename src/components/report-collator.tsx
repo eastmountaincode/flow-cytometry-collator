@@ -10,6 +10,7 @@ import type { ParsedReport, ParseProgress } from "@/lib/novoexpress-parser";
 import { MAX_REPORT_BYTES } from "@/lib/report-limits";
 import {
   hydrateReport,
+  type ParseReportStreamEvent,
   type TransportReport,
 } from "@/lib/report-transport";
 import {
@@ -39,7 +40,43 @@ type CopyFeedback = {
   status: CopyStatus;
 };
 
-async function parseReportOnServer(file: File) {
+function isTransportReport(payload: unknown): payload is TransportReport {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+
+  const candidate = payload as Partial<TransportReport>;
+  return (
+    Array.isArray(candidate.plots) &&
+    Array.isArray(candidate.groups) &&
+    candidate.groups.every(
+      (group) =>
+        group &&
+        typeof group === "object" &&
+        "plotIds" in group &&
+        Array.isArray(group.plotIds),
+    )
+  );
+}
+
+function isParseProgress(payload: unknown): payload is ParseProgress {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+
+  const candidate = payload as Partial<ParseProgress>;
+  return (
+    typeof candidate.currentPage === "number" &&
+    typeof candidate.pageCount === "number" &&
+    typeof candidate.percent === "number" &&
+    typeof candidate.stage === "string"
+  );
+}
+
+async function parseReportOnServer(
+  file: File,
+  onProgress: (progress: ParseProgress) => void,
+) {
   const response = await fetch(`${APP_BASE_PATH}/api/parse-report/`, {
     method: "POST",
     headers: {
@@ -50,12 +87,10 @@ async function parseReportOnServer(file: File) {
     cache: "no-store",
   });
 
-  const payload = (await response.json().catch(() => null)) as
-    | TransportReport
-    | { error?: unknown }
-    | null;
-
   if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as
+      | { error?: unknown }
+      | null;
     const serverMessage =
       payload &&
       "error" in payload &&
@@ -67,20 +102,79 @@ async function parseReportOnServer(file: File) {
     );
   }
 
-  if (
-    !payload ||
-    !("plots" in payload) ||
-    !Array.isArray(payload.plots) ||
-    !("groups" in payload) ||
-    !Array.isArray(payload.groups) ||
-    payload.groups.some(
-      (group) => !("plotIds" in group) || !Array.isArray(group.plotIds),
-    )
-  ) {
+  let report: TransportReport | null = null;
+  let serverError: string | null = null;
+  let bufferedText = "";
+
+  function processLine(line: string) {
+    if (!line.trim()) {
+      return;
+    }
+
+    let event: ParseReportStreamEvent;
+    try {
+      event = JSON.parse(line) as ParseReportStreamEvent;
+    } catch {
+      throw new Error("The server returned an unreadable report.");
+    }
+
+    if (event.type === "progress" && isParseProgress(event.progress)) {
+      onProgress(event.progress);
+      return;
+    }
+    if (event.type === "report" && isTransportReport(event.report)) {
+      report = event.report;
+      return;
+    }
+    if (event.type === "error" && typeof event.message === "string") {
+      serverError = event.message;
+      return;
+    }
+
     throw new Error("The server returned an incomplete report.");
   }
 
-  return hydrateReport(payload);
+  if (response.body) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        bufferedText += decoder.decode(value, { stream: !done });
+
+        let newlineIndex = bufferedText.indexOf("\n");
+        while (newlineIndex >= 0) {
+          processLine(bufferedText.slice(0, newlineIndex));
+          bufferedText = bufferedText.slice(newlineIndex + 1);
+          newlineIndex = bufferedText.indexOf("\n");
+        }
+
+        if (done) {
+          break;
+        }
+      }
+    } catch (cause) {
+      await reader.cancel().catch(() => undefined);
+      throw cause;
+    } finally {
+      reader.releaseLock();
+    }
+  } else {
+    bufferedText = await response.text();
+  }
+
+  if (bufferedText.trim()) {
+    processLine(bufferedText);
+  }
+  if (serverError) {
+    throw new Error(serverError);
+  }
+  if (!report) {
+    throw new Error("The server returned an incomplete report.");
+  }
+
+  return hydrateReport(report);
 }
 
 function imageUrlToPngBlob(imageUrl: string) {
@@ -203,14 +297,14 @@ export function ReportCollator() {
     setProgress({
       currentPage: 0,
       pageCount: 0,
-      percent: 5,
-      stage: "Processing report on CCIB",
+      percent: 0,
+      stage: "Uploading report",
     });
     setIsParsing(true);
     clearCopyFeedback();
 
     try {
-      const parsedReport = await parseReportOnServer(file);
+      const parsedReport = await parseReportOnServer(file, setProgress);
       setReport(parsedReport);
       setProgress({
         currentPage: parsedReport.pageCount,
@@ -360,14 +454,11 @@ export function ReportCollator() {
               <progress
                 id="parse-progress"
                 max="100"
-                value={progress.percent}
+                value={progress.pageCount > 0 ? progress.percent : undefined}
               />
-              <span>
-                Progress: {progress.percent}%
-                {progress.pageCount > 0
-                  ? `, page ${progress.currentPage} of ${progress.pageCount}`
-                  : ""}
-              </span>
+              {progress.pageCount > 0 && (
+                <span>Progress: {progress.percent}%</span>
+              )}
             </div>
           ) : (
             <div className="file-row">

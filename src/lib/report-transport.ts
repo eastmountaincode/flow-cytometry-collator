@@ -1,4 +1,5 @@
 import type {
+  ParseProgress,
   ParsedPlot,
   ParsedReport,
   PlotGroup,
@@ -11,6 +12,20 @@ export type TransportPlotGroup = Omit<PlotGroup, "plots"> & {
 export type TransportReport = Omit<ParsedReport, "groups"> & {
   groups: TransportPlotGroup[];
 };
+
+export type ParseReportStreamEvent =
+  | {
+      type: "progress";
+      progress: ParseProgress;
+    }
+  | {
+      type: "report";
+      report: TransportReport;
+    }
+  | {
+      type: "error";
+      message: string;
+    };
 
 export function serializeReport(report: ParsedReport): TransportReport {
   return {
