@@ -4,6 +4,7 @@ import Image from "next/image";
 import { Copy } from "lucide-react";
 import { type DragEvent, useEffect, useRef, useState } from "react";
 
+import { shouldBufferReportResponse } from "@/lib/browser-compatibility";
 import { exportCollatedPdf } from "@/lib/export-collated-pdf";
 import { exportCollatedPowerpoint } from "@/lib/export-collated-powerpoint";
 import type { ParsedReport, ParseProgress } from "@/lib/novoexpress-parser";
@@ -134,14 +135,26 @@ async function parseReportOnServer(
     throw new Error("The server returned an incomplete report.");
   }
 
-  if (response.body) {
-    const reader = response.body.getReader();
+  const responseBody = response.body;
+  const canReadStream =
+    responseBody &&
+    typeof responseBody.getReader === "function" &&
+    typeof TextDecoder === "function" &&
+    !shouldBufferReportResponse(window.navigator.userAgent);
+
+  if (canReadStream) {
+    const reader = responseBody.getReader();
     const decoder = new TextDecoder();
 
     try {
       while (true) {
         const { done, value } = await reader.read();
-        bufferedText += decoder.decode(value, { stream: !done });
+        if (value) {
+          bufferedText += decoder.decode(value, { stream: true });
+        }
+        if (done) {
+          bufferedText += decoder.decode();
+        }
 
         let newlineIndex = bufferedText.indexOf("\n");
         while (newlineIndex >= 0) {
@@ -158,9 +171,17 @@ async function parseReportOnServer(
       await reader.cancel().catch(() => undefined);
       throw cause;
     } finally {
-      reader.releaseLock();
+      if (typeof reader.releaseLock === "function") {
+        reader.releaseLock();
+      }
     }
   } else {
+    onProgress({
+      currentPage: 0,
+      pageCount: 0,
+      percent: 0,
+      stage: "Processing report on server...",
+    });
     bufferedText = await response.text();
   }
 
