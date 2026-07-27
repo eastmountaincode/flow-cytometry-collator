@@ -27,6 +27,12 @@ export type ParseReportStreamEvent =
       message: string;
     };
 
+export function splitReportStreamRecords(responseText: string) {
+  return responseText
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0);
+}
+
 export function serializeReport(report: ParsedReport): TransportReport {
   return {
     ...report,

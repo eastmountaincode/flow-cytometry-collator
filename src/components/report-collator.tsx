@@ -11,6 +11,7 @@ import type { ParsedReport, ParseProgress } from "@/lib/novoexpress-parser";
 import { MAX_REPORT_BYTES } from "@/lib/report-limits";
 import {
   hydrateReport,
+  splitReportStreamRecords,
   type ParseReportStreamEvent,
   type TransportReport,
 } from "@/lib/report-transport";
@@ -184,7 +185,10 @@ async function parseReportOnServer(
       percent: 0,
       stage: "Processing report on server...",
     });
-    bufferedText = await response.text();
+    const bufferedResponseText = await response.text();
+    for (const line of splitReportStreamRecords(bufferedResponseText)) {
+      processLine(line);
+    }
   }
 
   if (bufferedText.trim()) {
