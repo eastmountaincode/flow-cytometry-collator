@@ -1567,7 +1567,6 @@ export async function parseNovoExpressReport(
   type AxisGroupResolution = {
     key: string;
     label: string;
-    labelConfidence: number;
     axisX: string;
     axisY: string;
     fingerprints: AxisFingerprint[];
@@ -1586,49 +1585,6 @@ export async function parseNovoExpressReport(
   const hasTextAxes = (plot: ParsedPlot) =>
     plot.axisX !== "Embedded in plot image" &&
     plot.axisY !== "Embedded in plot image";
-
-  const inferredAxes = (plot: ParsedPlot) => {
-    if (plot.displayedGateNames.length === 0) {
-      return {
-        label: plot.groupLabel,
-        axisX: plot.axisX,
-        axisY: plot.axisY,
-        confidence: 1,
-      };
-    }
-    const gateKeys = new Set(
-      plot.displayedGateNames.map((gateName) => canonicalGate(gateName)),
-    );
-    const parentKey = canonicalGate(plot.parentPath);
-    if (
-      (gateKeys.has("cells") || gateKeys.has("e1")) &&
-      parentKey === "allevents"
-    ) {
-      return {
-        label: "FSC-H vs SSC-H",
-        axisX: "FSC-H",
-        axisY: "SSC-H",
-        confidence: 2,
-      };
-    }
-    if (
-      (gateKeys.has("singlets") && parentKey.includes("cells")) ||
-      (gateKeys.has("p2") && parentKey.includes("e1"))
-    ) {
-      return {
-        label: "FSC-H vs FSC-A",
-        axisX: "FSC-H",
-        axisY: "FSC-A",
-        confidence: 2,
-      };
-    }
-    return {
-      label: plot.groupLabel,
-      axisX: plot.axisX,
-      axisY: plot.axisY,
-      confidence: 1,
-    };
-  };
 
   const applyGroupDetails = (
     plot: ParsedPlot,
@@ -1663,7 +1619,6 @@ export async function parseNovoExpressReport(
     const group = textAxisGroups.get(key) ?? {
       key,
       label: `${plot.axisX} vs ${plot.axisY}`,
-      labelConfidence: 3,
       axisX: plot.axisX,
       axisY: plot.axisY,
       fingerprints: [],
@@ -1712,16 +1667,11 @@ export async function parseNovoExpressReport(
           }`;
       group = axisGroups.find((candidate) => candidate.key === fallbackKey);
       if (!group) {
-        const details = inferredAxes(plot);
         group = {
           key: fallbackKey,
-          label:
-            fingerprint && details.confidence === 1
-              ? "Axis labels unavailable"
-              : details.label,
-          labelConfidence: details.confidence,
-          axisX: details.axisX,
-          axisY: details.axisY,
+          label: fingerprint ? "Axis labels unavailable" : plot.groupLabel,
+          axisX: plot.axisX,
+          axisY: plot.axisY,
           fingerprints: [],
           plots: [],
         };
@@ -1731,17 +1681,6 @@ export async function parseNovoExpressReport(
         } else {
           usedAxisFallback = true;
         }
-      }
-    }
-
-    const details = inferredAxes(plot);
-    if (details.confidence > group.labelConfidence) {
-      group.label = details.label;
-      group.labelConfidence = details.confidence;
-      group.axisX = details.axisX;
-      group.axisY = details.axisY;
-      for (const groupedPlot of group.plots) {
-        applyGroupDetails(groupedPlot, group);
       }
     }
 
@@ -1766,7 +1705,6 @@ export async function parseNovoExpressReport(
     }
 
     group.label = `${identifiedX.label} vs ${identifiedY.label}`;
-    group.labelConfidence = 3;
     group.axisX = identifiedX.label;
     group.axisY = identifiedY.label;
     for (const groupedPlot of group.plots) {
