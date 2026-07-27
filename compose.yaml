@@ -12,6 +12,8 @@ services:
       context: .
       args:
         NEXT_PUBLIC_BASE_PATH: "${FLOW_COLLATOR_BASE_PATH:-/flow-cytometry-collator}"
+        NEXT_PUBLIC_BUILD_TIME: "${FLOW_COLLATOR_BUILD_TIME:-development}"
+        NEXT_PUBLIC_COMMIT_SHA: "${FLOW_COLLATOR_COMMIT_SHA:-local}"
     environment:
       APP_BASE_PATH: "${FLOW_COLLATOR_BASE_PATH:-/flow-cytometry-collator}"
     init: true
