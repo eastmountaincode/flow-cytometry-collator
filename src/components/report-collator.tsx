@@ -3,6 +3,7 @@
 import Image from "next/image";
 import { Copy } from "lucide-react";
 import {
+  type CSSProperties,
   type DragEvent,
   type FormEvent,
   useEffect,
@@ -42,6 +43,7 @@ const APP_BASE_PATH = (process.env.NEXT_PUBLIC_BASE_PATH ?? "").replace(
 const APP_BUILD_TIME = process.env.NEXT_PUBLIC_BUILD_TIME ?? "development";
 const APP_COMMIT_SHA = process.env.NEXT_PUBLIC_COMMIT_SHA ?? "local";
 const APP_VERSION = `${APP_BUILD_TIME} · ${APP_COMMIT_SHA}`;
+const SAMPLE_ROWS_PER_COLUMN = 12;
 
 type ReportView = "groups" | "samples";
 type ExportFormat = "pdf" | "powerpoint";
@@ -801,7 +803,20 @@ export function ReportCollator() {
           ) : (
             <section className="sample-section">
               <h2>Samples</h2>
-              <ol className="sample-list">
+              <ol
+                className="sample-list"
+                style={
+                  {
+                    "--sample-row-count": Math.max(
+                      1,
+                      Math.min(
+                        SAMPLE_ROWS_PER_COLUMN,
+                        report.sampleNames.length,
+                      ),
+                    ),
+                  } as CSSProperties
+                }
+              >
                 {report.sampleNames.map((sampleName) => (
                   <li key={sampleName} title={sampleName}>
                     {sampleName}
