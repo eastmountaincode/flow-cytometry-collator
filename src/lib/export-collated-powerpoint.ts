@@ -170,7 +170,7 @@ export async function exportCollatedPowerpoint(
       color: "777777",
       breakLine: false,
     });
-    slide.addText(collatorVersion, {
+    slide.addText(`Version ${collatorVersion}`, {
       x: 6.9,
       y: SLIDE_HEIGHT - 0.25,
       w: 4.55,

@@ -276,7 +276,7 @@ export async function exportCollatedPdf(
     pdf.setTextColor(112, 126, 138);
     pdf.text(report.fileName, margin, pageHeight - 13);
     pdf.text(
-      collatorVersion,
+      `Version ${collatorVersion}`,
       pageWidth - margin,
       pageHeight - 13,
       { align: "right" },
