@@ -315,11 +315,13 @@ progress {
   align-items: center;
   gap: 0.45rem;
   margin-top: 0.3rem;
+  cursor: pointer;
 }
 
 .export-option input {
   margin: 0;
   accent-color: #000000;
+  cursor: pointer;
 }
 
 .export-dialog__actions {
