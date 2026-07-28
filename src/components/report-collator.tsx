@@ -34,6 +34,7 @@ const APP_BASE_PATH = (process.env.NEXT_PUBLIC_BASE_PATH ?? "").replace(
 );
 const APP_BUILD_TIME = process.env.NEXT_PUBLIC_BUILD_TIME ?? "development";
 const APP_COMMIT_SHA = process.env.NEXT_PUBLIC_COMMIT_SHA ?? "local";
+const APP_VERSION = `${APP_BUILD_TIME} · ${APP_COMMIT_SHA}`;
 
 type ReportView = "groups" | "samples";
 type ExportFormat = "pdf" | "powerpoint";
@@ -423,9 +424,9 @@ export function ReportCollator() {
     setError(null);
     try {
       if (format === "pdf") {
-        await exportCollatedPdf(report);
+        await exportCollatedPdf(report, APP_VERSION);
       } else {
-        await exportCollatedPowerpoint(report);
+        await exportCollatedPowerpoint(report, APP_VERSION);
       }
     } catch (cause) {
       setError(
@@ -464,7 +465,7 @@ export function ReportCollator() {
           />
           <h1>Flow cytometry report collator</h1>
           <p className="site-version">
-            Version {APP_BUILD_TIME} · {APP_COMMIT_SHA}
+            Version {APP_VERSION}
           </p>
         </div>
       </header>

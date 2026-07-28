@@ -74,7 +74,10 @@ function metadataFields(plot: ParsedPlot): MetadataField[] {
   ];
 }
 
-export async function exportCollatedPdf(report: ParsedReport) {
+export async function exportCollatedPdf(
+  report: ParsedReport,
+  collatorVersion: string,
+) {
   const { jsPDF } = await import("jspdf");
   const pdf = new jsPDF({
     orientation: "landscape",
@@ -254,7 +257,7 @@ export async function exportCollatedPdf(report: ParsedReport) {
       pdf.setTextColor(112, 126, 138);
       pdf.text(report.fileName, margin, pageHeight - 13);
       pdf.text(
-        "Generated locally in the browser",
+        collatorVersion,
         pageWidth - margin,
         pageHeight - 13,
         { align: "right" },

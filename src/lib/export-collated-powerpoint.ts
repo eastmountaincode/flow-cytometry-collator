@@ -24,7 +24,10 @@ function fitPlot(
   return { width, height };
 }
 
-export async function exportCollatedPowerpoint(report: ParsedReport) {
+export async function exportCollatedPowerpoint(
+  report: ParsedReport,
+  collatorVersion: string,
+) {
   const { default: PptxGenJS } = await import("pptxgenjs");
   const presentation = new PptxGenJS();
   const marginX = 0.45;
@@ -134,7 +137,7 @@ export async function exportCollatedPowerpoint(report: ParsedReport) {
       slide.addText(report.metadata.fileName ?? report.fileName, {
         x: marginX,
         y: SLIDE_HEIGHT - 0.25,
-        w: 10.5,
+        w: 6.35,
         h: 0.12,
         margin: 0,
         fontFace: "Arial",
@@ -142,10 +145,22 @@ export async function exportCollatedPowerpoint(report: ParsedReport) {
         color: "777777",
         breakLine: false,
       });
-      slide.addText(`${slideNumber} / ${slideCount}`, {
-        x: 11.55,
+      slide.addText(collatorVersion, {
+        x: 6.9,
         y: SLIDE_HEIGHT - 0.25,
-        w: 1.33,
+        w: 4.55,
+        h: 0.12,
+        margin: 0,
+        fontFace: "Arial",
+        fontSize: 8,
+        color: "777777",
+        align: "right",
+        breakLine: false,
+      });
+      slide.addText(`${slideNumber} / ${slideCount}`, {
+        x: 11.65,
+        y: SLIDE_HEIGHT - 0.25,
+        w: 1.23,
         h: 0.12,
         margin: 0,
         fontFace: "Arial",
