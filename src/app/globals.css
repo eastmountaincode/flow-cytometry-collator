@@ -257,8 +257,8 @@ progress {
 }
 
 .export-dialog {
-  width: min(calc(100% - 2rem), 28rem);
-  padding: 0;
+  width: min(calc(100% - 2rem), 24rem);
+  padding: 1rem;
   border: 1px solid var(--line);
   border-radius: 0;
   background: var(--paper);
@@ -273,8 +273,7 @@ progress {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.6rem 0.75rem;
-  border-bottom: 1px solid var(--line);
+  margin-bottom: 1rem;
 }
 
 .export-dialog__header h2 {
@@ -283,27 +282,29 @@ progress {
 }
 
 .export-dialog__close {
-  width: 2rem;
-  min-height: 2rem;
+  width: 1.75rem;
+  min-height: 1.75rem;
   padding: 0;
   border: 0;
   background: transparent;
-  font-size: 1.5rem;
+  font-size: 1.35rem;
   line-height: 1;
 }
 
 .export-dialog form {
+  display: grid;
+  gap: 1rem;
   margin: 0;
 }
 
 .export-dialog fieldset {
   margin: 0;
-  padding: 0.75rem;
+  padding: 0;
   border: 0;
-  border-bottom: 1px solid var(--line);
 }
 
 .export-dialog legend {
+  margin-bottom: 0.4rem;
   padding: 0;
   font-weight: 700;
 }
@@ -312,7 +313,7 @@ progress {
   display: flex;
   align-items: center;
   gap: 0.45rem;
-  margin-top: 0.45rem;
+  margin-top: 0.3rem;
 }
 
 .export-option input {
@@ -323,7 +324,7 @@ progress {
 .export-dialog__actions {
   display: flex;
   justify-content: flex-end;
-  padding: 0.75rem;
+  margin-top: 0.1rem;
 }
 
 .view-switcher button {
