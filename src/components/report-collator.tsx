@@ -2,11 +2,18 @@
 
 import Image from "next/image";
 import { Copy } from "lucide-react";
-import { type DragEvent, useEffect, useRef, useState } from "react";
+import {
+  type DragEvent,
+  type FormEvent,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
 import { shouldBufferReportResponse } from "@/lib/browser-compatibility";
 import { exportCollatedPdf } from "@/lib/export-collated-pdf";
 import { exportCollatedPowerpoint } from "@/lib/export-collated-powerpoint";
+import type { ExportGrouping } from "@/lib/export-grouping";
 import type { ParsedReport, ParseProgress } from "@/lib/novoexpress-parser";
 import { MAX_REPORT_BYTES } from "@/lib/report-limits";
 import {
@@ -260,13 +267,19 @@ async function copyPlotImage(imageUrl: string) {
 
 export function ReportCollator() {
   const inputRef = useRef<HTMLInputElement>(null);
+  const exportDialogRef = useRef<HTMLDialogElement>(null);
   const dragDepthRef = useRef(0);
   const copyFeedbackTimeoutRef = useRef<number | null>(null);
   const [report, setReport] = useState<ParsedReport | null>(null);
   const [progress, setProgress] = useState<ParseProgress>(initialProgress);
   const [error, setError] = useState<string | null>(null);
   const [isParsing, setIsParsing] = useState(false);
-  const [exportFormat, setExportFormat] = useState<ExportFormat | null>(null);
+  const [exportingFormat, setExportingFormat] =
+    useState<ExportFormat | null>(null);
+  const [exportGrouping, setExportGrouping] =
+    useState<ExportGrouping>("plot-type");
+  const [selectedExportFormat, setSelectedExportFormat] =
+    useState<ExportFormat>("pdf");
   const [isDragging, setIsDragging] = useState(false);
   const [view, setView] = useState<ReportView>("groups");
   const [copyFeedback, setCopyFeedback] = useState<CopyFeedback | null>(null);
@@ -415,18 +428,21 @@ export function ReportCollator() {
     void processFile(event.dataTransfer.files[0]);
   }
 
-  async function handleExport(format: ExportFormat) {
+  async function handleExport(
+    format: ExportFormat,
+    grouping: ExportGrouping,
+  ) {
     if (!report) {
       return;
     }
 
-    setExportFormat(format);
+    setExportingFormat(format);
     setError(null);
     try {
       if (format === "pdf") {
-        await exportCollatedPdf(report, APP_VERSION);
+        await exportCollatedPdf(report, APP_VERSION, grouping);
       } else {
-        await exportCollatedPowerpoint(report, APP_VERSION);
+        await exportCollatedPowerpoint(report, APP_VERSION, grouping);
       }
     } catch (cause) {
       setError(
@@ -437,8 +453,14 @@ export function ReportCollator() {
             } could not be generated.`,
       );
     } finally {
-      setExportFormat(null);
+      setExportingFormat(null);
     }
+  }
+
+  function handleExportSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    exportDialogRef.current?.close();
+    void handleExport(selectedExportFormat, exportGrouping);
   }
 
   async function handleCopyPlot(plotId: string, imageUrl: string) {
@@ -594,23 +616,86 @@ export function ReportCollator() {
               <button type="button" onClick={reset}>
                 Clear
               </button>
-              <select
-                aria-label="Export report"
-                value=""
-                disabled={exportFormat !== null}
-                onChange={(event) => {
-                  const format = event.currentTarget.value as ExportFormat;
-                  void handleExport(format);
-                }}
+              <button
+                type="button"
+                disabled={exportingFormat !== null}
+                onClick={() => exportDialogRef.current?.showModal()}
               >
-                <option value="" disabled>
-                  {exportFormat ? "Exporting…" : "Export"}
-                </option>
-                <option value="pdf">Export as PDF</option>
-                <option value="powerpoint">Export as PowerPoint</option>
-              </select>
+                {exportingFormat ? "Exporting…" : "Export"}
+              </button>
             </div>
           </section>
+
+          <dialog
+            ref={exportDialogRef}
+            className="export-dialog"
+            aria-labelledby="export-dialog-title"
+          >
+            <header className="export-dialog__header">
+              <h2 id="export-dialog-title">Export</h2>
+              <button
+                type="button"
+                className="export-dialog__close"
+                aria-label="Close export options"
+                onClick={() => exportDialogRef.current?.close()}
+              >
+                ×
+              </button>
+            </header>
+            <form onSubmit={handleExportSubmit}>
+              <fieldset>
+                <legend>Group plots by</legend>
+                <label className="export-option">
+                  <input
+                    type="radio"
+                    name="export-grouping"
+                    value="plot-type"
+                    checked={exportGrouping === "plot-type"}
+                    onChange={() => setExportGrouping("plot-type")}
+                  />
+                  Plot type
+                </label>
+                <label className="export-option">
+                  <input
+                    type="radio"
+                    name="export-grouping"
+                    value="sample"
+                    checked={exportGrouping === "sample"}
+                    onChange={() => setExportGrouping("sample")}
+                  />
+                  Sample
+                </label>
+              </fieldset>
+              <fieldset>
+                <legend>Format</legend>
+                <label className="export-option">
+                  <input
+                    type="radio"
+                    name="export-format"
+                    value="pdf"
+                    checked={selectedExportFormat === "pdf"}
+                    onChange={() => setSelectedExportFormat("pdf")}
+                  />
+                  PDF
+                </label>
+                <label className="export-option">
+                  <input
+                    type="radio"
+                    name="export-format"
+                    value="powerpoint"
+                    checked={selectedExportFormat === "powerpoint"}
+                    onChange={() =>
+                      setSelectedExportFormat("powerpoint")
+                    }
+                  />
+                  PowerPoint
+                </label>
+              </fieldset>
+              <div className="export-dialog__actions">
+                <button type="submit">Export</button>
+              </div>
+            </form>
+          </dialog>
 
           {view === "groups" ? (
             <div className="plot-groups">

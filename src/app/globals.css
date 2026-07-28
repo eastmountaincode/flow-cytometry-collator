@@ -256,8 +256,74 @@ progress {
   padding-bottom: 0.35rem;
 }
 
-.toolbar-actions select:not(:disabled) {
-  cursor: pointer;
+.export-dialog {
+  width: min(calc(100% - 2rem), 28rem);
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--paper);
+  color: var(--text);
+}
+
+.export-dialog::backdrop {
+  background: rgb(0 0 0 / 25%);
+}
+
+.export-dialog__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.export-dialog__header h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.export-dialog__close {
+  width: 2rem;
+  min-height: 2rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: 1.5rem;
+  line-height: 1;
+}
+
+.export-dialog form {
+  margin: 0;
+}
+
+.export-dialog fieldset {
+  margin: 0;
+  padding: 0.75rem;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.export-dialog legend {
+  padding: 0;
+  font-weight: 700;
+}
+
+.export-option {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 0.45rem;
+}
+
+.export-option input {
+  margin: 0;
+  accent-color: #000000;
+}
+
+.export-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.75rem;
 }
 
 .view-switcher button {
