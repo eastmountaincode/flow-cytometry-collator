@@ -573,7 +573,7 @@ export function ReportCollator() {
                 <dd>{report.plots.length}</dd>
               </div>
               <div>
-                <dt>Groups</dt>
+                <dt>Plot groups</dt>
                 <dd>{report.groups.length}</dd>
               </div>
             </dl>

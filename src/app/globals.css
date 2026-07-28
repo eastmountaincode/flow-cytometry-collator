@@ -178,9 +178,10 @@ progress {
 
 .report-summary {
   display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(12rem, 1fr);
+  grid-template-columns: fit-content(38rem) max-content;
   align-items: flex-start;
-  gap: 2rem;
+  justify-content: start;
+  gap: 2.5rem;
   margin-bottom: 1rem;
   padding-bottom: 0.75rem;
   border-bottom: 1px solid var(--line);
@@ -362,6 +363,10 @@ progress {
   font-weight: 700;
 }
 
+.sample-section h2 {
+  margin-bottom: 0.75rem;
+}
+
 .plot-group__details {
   display: flex;
   flex-wrap: wrap;
@@ -479,22 +484,25 @@ progress {
 
 .sample-list {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.25rem 2rem;
+  grid-template-columns: repeat(3, minmax(0, 17rem));
+  justify-content: start;
+  gap: 0.5rem 1.5rem;
   margin: 0;
   padding-left: 2rem;
 }
 
 .sample-list li {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 900px) {
   .plot-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .sample-list {
+    grid-template-columns: repeat(2, minmax(0, 17rem));
   }
 }
 
