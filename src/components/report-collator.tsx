@@ -704,7 +704,7 @@ export function ReportCollator() {
               {report.groups.map((group) => (
                 <section className="plot-group" key={group.key}>
                   <header className="plot-group__header">
-                    <h2>Plot: {group.label}</h2>
+                    <h2>Plot group: {group.label}</h2>
                     <dl className="plot-group__details">
                       <div>
                         <dt>Samples shown</dt>
