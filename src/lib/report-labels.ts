@@ -14,7 +14,13 @@ export function formatInputPopulations(
   return `${labels.slice(0, maximumShown).join(", ")} (and ${remaining} more)`;
 }
 
-export function formatDisplayedGates(gateNames: string[]) {
+export function formatDisplayedGates(
+  gateNames: string[],
+  status: "resolved" | "unavailable" = "resolved",
+) {
+  if (status === "unavailable") {
+    return "Unavailable";
+  }
   return gateNames.length > 0 ? gateNames.join(", ") : "None";
 }
 

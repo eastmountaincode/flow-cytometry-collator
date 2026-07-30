@@ -70,7 +70,10 @@ function metadataFields(
     },
     {
       label: displayedGateLabel(plot.displayedGateNames),
-      value: formatDisplayedGates(plot.displayedGateNames),
+      value: formatDisplayedGates(
+        plot.displayedGateNames,
+        plot.gateMetadataStatus,
+      ),
       maximumLines: 2,
     },
     {

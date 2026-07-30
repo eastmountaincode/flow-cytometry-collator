@@ -786,7 +786,12 @@ export function ReportCollator() {
                             </div>
                             <div className="plot-caption__wide">
                               <dt>{displayedGateLabel(plot.displayedGateNames)}</dt>
-                              <dd>{formatDisplayedGates(plot.displayedGateNames)}</dd>
+                              <dd>
+                                {formatDisplayedGates(
+                                  plot.displayedGateNames,
+                                  plot.gateMetadataStatus,
+                                )}
+                              </dd>
                             </div>
                             <div>
                               <dt>Page</dt>
