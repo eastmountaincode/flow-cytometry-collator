@@ -595,14 +595,11 @@ export function ReportCollator() {
                 <dt>Plot groups</dt>
                 <dd>{report.groups.length}</dd>
               </div>
-              <div className="report-summary__support">
-                <dt>Version</dt>
-                <dd>
-                  <span>{APP_DISPLAY_VERSION}</span>
-                  <BugReportLink />
-                </dd>
-              </div>
             </dl>
+            <p className="support-line report-summary__support-line">
+              <BugReportLink />
+              <span>Version {APP_DISPLAY_VERSION}</span>
+            </p>
           </section>
 
           {report.warnings.length > 0 && (

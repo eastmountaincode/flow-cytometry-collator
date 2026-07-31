@@ -189,7 +189,7 @@ progress {
 
 .report-summary {
   display: grid;
-  grid-template-columns: fit-content(38rem) max-content;
+  grid-template-columns: fit-content(38rem) max-content 1fr;
   align-items: flex-start;
   justify-content: start;
   gap: 2.5rem;
@@ -242,10 +242,9 @@ progress {
   margin: 0;
 }
 
-.report-summary__support dd {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
+.report-summary__support-line {
+  align-self: start;
+  margin-top: 0.1rem;
 }
 
 .report-controls {
