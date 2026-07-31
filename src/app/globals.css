@@ -119,14 +119,6 @@ progress {
   line-height: 1.1;
 }
 
-.site-version {
-  margin: 0 0 0 auto;
-  color: var(--muted);
-  font-size: 0.8rem;
-  text-align: right;
-  white-space: nowrap;
-}
-
 .drop-zone {
   min-height: 12rem;
   margin: 0;
@@ -174,6 +166,25 @@ progress {
 
 .error-message {
   border-left-width: 4px;
+}
+
+.support-line {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  margin: 0.6rem 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.bug-report-link {
+  color: inherit;
+  text-underline-offset: 0.15em;
+}
+
+.bug-report-link:hover {
+  color: var(--text);
 }
 
 .report-summary {
@@ -229,6 +240,12 @@ progress {
 .report-summary__counts dd,
 .plot-group__details dd {
   margin: 0;
+}
+
+.report-summary__support dd {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
 }
 
 .report-controls {
@@ -516,11 +533,6 @@ progress {
 
   .site-header__inner h1 {
     font-size: 1.4rem;
-  }
-
-  .site-version {
-    width: 100%;
-    white-space: normal;
   }
 
   .report-summary {

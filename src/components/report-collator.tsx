@@ -43,6 +43,11 @@ const APP_BASE_PATH = (process.env.NEXT_PUBLIC_BASE_PATH ?? "").replace(
 const APP_BUILD_TIME = process.env.NEXT_PUBLIC_BUILD_TIME ?? "development";
 const APP_COMMIT_SHA = process.env.NEXT_PUBLIC_COMMIT_SHA ?? "local";
 const APP_VERSION = `${APP_BUILD_TIME} · ${APP_COMMIT_SHA}`;
+const APP_DISPLAY_VERSION = APP_COMMIT_SHA.slice(0, 12);
+const BUG_REPORT_EMAIL = "aboylan@mgh.harvard.edu";
+const BUG_REPORT_HREF = `mailto:${BUG_REPORT_EMAIL}?subject=${encodeURIComponent(
+  "Flow cytometry report collator bug report",
+)}&body=${encodeURIComponent(`Version: ${APP_VERSION}\n\nWhat happened?\n`)}`;
 const SAMPLE_ROWS_PER_COLUMN = 12;
 
 type ReportView = "groups" | "samples";
@@ -53,6 +58,14 @@ type CopyFeedback = {
   plotId: string;
   status: CopyStatus;
 };
+
+function BugReportLink() {
+  return (
+    <a className="bug-report-link" href={BUG_REPORT_HREF}>
+      Report a bug
+    </a>
+  );
+}
 
 function isTransportReport(payload: unknown): payload is TransportReport {
   if (!payload || typeof payload !== "object") {
@@ -488,9 +501,6 @@ export function ReportCollator() {
             unoptimized
           />
           <h1>Flow cytometry report collator</h1>
-          <p className="site-version">
-            Version {APP_VERSION}
-          </p>
         </div>
       </header>
 
@@ -540,6 +550,13 @@ export function ReportCollator() {
         </section>
       )}
 
+      {!report && (
+        <p className="support-line">
+          <BugReportLink />
+          <span>Version {APP_DISPLAY_VERSION}</span>
+        </p>
+      )}
+
       {report && (
         <>
           <section className="report-summary" aria-label="Report summary">
@@ -577,6 +594,13 @@ export function ReportCollator() {
               <div>
                 <dt>Plot groups</dt>
                 <dd>{report.groups.length}</dd>
+              </div>
+              <div className="report-summary__support">
+                <dt>Version</dt>
+                <dd>
+                  <span>{APP_DISPLAY_VERSION}</span>
+                  <BugReportLink />
+                </dd>
               </div>
             </dl>
           </section>
