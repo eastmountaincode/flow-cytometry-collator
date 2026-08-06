@@ -10,6 +10,8 @@ const SLIDE_HEIGHT = 7.5;
 const COLUMNS = 3;
 const ROWS = 2;
 
+export type PresentationTarget = "powerpoint" | "keynote";
+
 function fitPlot(
   plot: ParsedPlot,
   boxWidth: number,
@@ -51,6 +53,7 @@ export async function exportCollatedPowerpoint(
   report: ParsedReport,
   collatorVersion: string,
   grouping: ExportGrouping = "plot-type",
+  target: PresentationTarget = "powerpoint",
 ) {
   const { default: PptxGenJS } = await import("pptxgenjs");
   const presentation = new PptxGenJS();
@@ -73,8 +76,12 @@ export async function exportCollatedPowerpoint(
   presentation.company = "";
   presentation.subject =
     grouping === "sample"
-      ? "Flow cytometry plots grouped by sample"
-      : "Flow cytometry plots grouped by plot type";
+      ? `Flow cytometry plots grouped by sample${
+          target === "keynote" ? " for Keynote" : ""
+        }`
+      : `Flow cytometry plots grouped by plot type${
+          target === "keynote" ? " for Keynote" : ""
+        }`;
   presentation.title = report.metadata.fileName ?? report.fileName;
   presentation.theme = {
     headFontFace: "Arial",
@@ -199,8 +206,9 @@ export async function exportCollatedPowerpoint(
   const baseName = report.fileName.replace(/\.pdf$/i, "");
   const safeBaseName = baseName.replace(/[\\/:*?"<>|]+/g, "-");
   const groupingSuffix = grouping === "sample" ? "-by-sample" : "";
+  const targetSuffix = target === "keynote" ? "-for-keynote" : "";
   await presentation.writeFile({
-    fileName: `${safeBaseName}-collated${groupingSuffix}.pptx`,
+    fileName: `${safeBaseName}-collated${groupingSuffix}${targetSuffix}.pptx`,
     compression: true,
   });
 }

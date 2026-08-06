@@ -3,7 +3,6 @@
 import Image from "next/image";
 import { Copy } from "lucide-react";
 import {
-  type CSSProperties,
   type DragEvent,
   type FormEvent,
   useEffect,
@@ -14,7 +13,10 @@ import {
 import { shouldBufferReportResponse } from "@/lib/browser-compatibility";
 import { exportCollatedPdf } from "@/lib/export-collated-pdf";
 import { exportCollatedPowerpoint } from "@/lib/export-collated-powerpoint";
-import type { ExportGrouping } from "@/lib/export-grouping";
+import {
+  getExportSections,
+  type ExportGrouping,
+} from "@/lib/export-grouping";
 import type { ParsedReport, ParseProgress } from "@/lib/novoexpress-parser";
 import { MAX_REPORT_BYTES } from "@/lib/report-limits";
 import {
@@ -48,10 +50,9 @@ const BUG_REPORT_EMAIL = "aboylan@mgh.harvard.edu";
 const BUG_REPORT_HREF = `mailto:${BUG_REPORT_EMAIL}?subject=${encodeURIComponent(
   "Flow cytometry report collator bug report",
 )}&body=${encodeURIComponent(`Version: ${APP_VERSION}\n\nWhat happened?\n`)}`;
-const SAMPLE_ROWS_PER_COLUMN = 12;
 
 type ReportView = "groups" | "samples";
-type ExportFormat = "pdf" | "powerpoint";
+type ExportFormat = "pdf" | "powerpoint" | "keynote";
 type CopyStatus = "copied" | "error";
 
 type CopyFeedback = {
@@ -298,6 +299,11 @@ export function ReportCollator() {
   const [isDragging, setIsDragging] = useState(false);
   const [view, setView] = useState<ReportView>("groups");
   const [copyFeedback, setCopyFeedback] = useState<CopyFeedback | null>(null);
+  const visibleGrouping: ExportGrouping =
+    view === "groups" ? "plot-type" : "sample";
+  const visibleSections = report
+    ? getExportSections(report, visibleGrouping)
+    : [];
 
   useEffect(() => {
     return () => {
@@ -457,14 +463,23 @@ export function ReportCollator() {
       if (format === "pdf") {
         await exportCollatedPdf(report, APP_VERSION, grouping);
       } else {
-        await exportCollatedPowerpoint(report, APP_VERSION, grouping);
+        await exportCollatedPowerpoint(
+          report,
+          APP_VERSION,
+          grouping,
+          format,
+        );
       }
     } catch (cause) {
       setError(
         cause instanceof Error
           ? cause.message
           : `The grouped ${
-              format === "pdf" ? "PDF" : "PowerPoint"
+              format === "pdf"
+                ? "PDF"
+                : format === "keynote"
+                  ? "Keynote-compatible presentation"
+                  : "PowerPoint"
             } could not be generated.`,
       );
     } finally {
@@ -617,14 +632,14 @@ export function ReportCollator() {
           )}
 
           <section className="report-controls" aria-label="Report controls">
-            <nav className="view-switcher" aria-label="Report view">
+            <nav className="view-switcher" aria-label="Group plots by">
               <button
                 type="button"
                 className={view === "groups" ? "is-active" : undefined}
                 aria-pressed={view === "groups"}
                 onClick={() => setView("groups")}
               >
-                Grouped plots
+                By plot type
               </button>
               <button
                 type="button"
@@ -632,7 +647,7 @@ export function ReportCollator() {
                 aria-pressed={view === "samples"}
                 onClick={() => setView("samples")}
               >
-                Samples
+                By sample
               </button>
             </nav>
             <div className="toolbar-actions">
@@ -642,7 +657,10 @@ export function ReportCollator() {
               <button
                 type="button"
                 disabled={exportingFormat !== null}
-                onClick={() => exportDialogRef.current?.showModal()}
+                onClick={() => {
+                  setExportGrouping(visibleGrouping);
+                  exportDialogRef.current?.showModal();
+                }}
               >
                 {exportingFormat ? "Exporting…" : "Export"}
               </button>
@@ -713,6 +731,18 @@ export function ReportCollator() {
                   />
                   PowerPoint
                 </label>
+                <label className="export-option">
+                  <input
+                    type="radio"
+                    name="export-format"
+                    value="keynote"
+                    checked={selectedExportFormat === "keynote"}
+                    onChange={() => setSelectedExportFormat("keynote")}
+                  />
+                  <span>
+                    Keynote-compatible <small>(.pptx)</small>
+                  </span>
+                </label>
               </fieldset>
               <div className="export-dialog__actions">
                 <button type="submit">Export</button>
@@ -720,137 +750,136 @@ export function ReportCollator() {
             </form>
           </dialog>
 
-          {view === "groups" ? (
-            <div className="plot-groups">
-              {report.groups.map((group) => (
-                <section className="plot-group" key={group.key}>
-                  <header className="plot-group__header">
-                    <h2>Plot group: {group.label}</h2>
-                    <dl className="plot-group__details">
-                      <div>
-                        <dt>Samples shown</dt>
-                        <dd>
-                          {
-                            new Set(
-                              group.plots.map((plot) => plot.sampleName),
-                            ).size
+          <div className="plot-groups">
+            {visibleSections.map((section) => (
+              <section className="plot-group" key={section.key}>
+                <header className="plot-group__header">
+                  <h2>
+                    {visibleGrouping === "sample" ? "Sample" : "Plot group"}
+                    : {section.label}
+                  </h2>
+                  <dl className="plot-group__details">
+                    <div>
+                      <dt>
+                        {visibleGrouping === "sample"
+                          ? "Plots shown"
+                          : "Samples shown"}
+                      </dt>
+                      <dd>
+                        {visibleGrouping === "sample"
+                          ? section.plots.length
+                          : new Set(
+                              section.plots.map((plot) => plot.sampleKey),
+                            ).size}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>
+                        Input population
+                        {section.parentPaths.length === 1 ? "" : "s"}
+                      </dt>
+                      <dd title={formatInputPopulations(section.parentPaths)}>
+                        {formatInputPopulations(section.parentPaths, 3)}
+                      </dd>
+                    </div>
+                  </dl>
+                </header>
+                <div className="plot-grid">
+                  {section.plots.map((plot) => (
+                    <figure key={plot.id}>
+                      <div className="plot-image">
+                        {/* PDF crops are generated in-memory and have no stable URL for next/image. */}
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={plot.imageUrl}
+                          alt={`${plot.groupLabel} plot for ${plot.sampleName}`}
+                        />
+                        <button
+                          type="button"
+                          className={`plot-copy-button${
+                            copyFeedback?.plotId === plot.id
+                              ? " has-label"
+                              : ""
+                          }`}
+                          aria-label={
+                            copyFeedback?.plotId === plot.id
+                              ? copyFeedback.status === "copied"
+                                ? `Copied ${plot.groupLabel} plot for ${plot.sampleName}`
+                                : `Copy failed for ${plot.groupLabel} plot for ${plot.sampleName}`
+                              : `Copy ${plot.groupLabel} plot for ${plot.sampleName}`
                           }
-                        </dd>
+                          title={
+                            copyFeedback?.plotId === plot.id &&
+                            copyFeedback.status === "error"
+                              ? "Copy failed — right-click the image"
+                              : "Copy plot image"
+                          }
+                          onClick={() =>
+                            void handleCopyPlot(plot.id, plot.imageUrl)
+                          }
+                        >
+                          {copyFeedback?.plotId === plot.id ? (
+                            <span aria-live="polite">
+                              {copyFeedback.status === "copied"
+                                ? "Copied"
+                                : "Copy failed"}
+                            </span>
+                          ) : (
+                            <Copy aria-hidden="true" />
+                          )}
+                        </button>
                       </div>
-                      <div>
-                        <dt>
-                          Input population
-                          {group.parentPaths.length === 1 ? "" : "s"}
-                        </dt>
-                        <dd title={formatInputPopulations(group.parentPaths)}>
-                          {formatInputPopulations(group.parentPaths, 3)}
-                        </dd>
-                      </div>
-                    </dl>
-                  </header>
-                  <div className="plot-grid">
-                    {group.plots.map((plot) => (
-                      <figure key={plot.id}>
-                        <div className="plot-image">
-                          {/* PDF crops are generated in-memory and have no stable URL for next/image. */}
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={plot.imageUrl}
-                            alt={`${group.label} plot for ${plot.sampleName}`}
-                          />
-                          <button
-                            type="button"
-                            className={`plot-copy-button${
-                              copyFeedback?.plotId === plot.id
-                                ? " has-label"
-                                : ""
-                            }`}
-                            aria-label={
-                              copyFeedback?.plotId === plot.id
-                                ? copyFeedback.status === "copied"
-                                  ? `Copied ${group.label} plot for ${plot.sampleName}`
-                                  : `Copy failed for ${group.label} plot for ${plot.sampleName}`
-                                : `Copy ${group.label} plot for ${plot.sampleName}`
-                            }
-                            title={
-                              copyFeedback?.plotId === plot.id &&
-                              copyFeedback.status === "error"
-                                ? "Copy failed — right-click the image"
-                                : "Copy plot image"
-                            }
-                            onClick={() =>
-                              void handleCopyPlot(plot.id, plot.imageUrl)
-                            }
-                          >
-                            {copyFeedback?.plotId === plot.id ? (
-                              <span aria-live="polite">
-                                {copyFeedback.status === "copied"
-                                  ? "Copied"
-                                  : "Copy failed"}
-                              </span>
-                            ) : (
-                              <Copy aria-hidden="true" />
-                            )}
-                          </button>
-                        </div>
-                        <figcaption>
-                          <dl>
-                            <div className="plot-caption__sample">
-                              <dt>Sample</dt>
-                              <dd title={plot.sampleName}>{plot.sampleName}</dd>
-                            </div>
-                            <div className="plot-caption__wide">
-                              <dt>Input population</dt>
-                              <dd title={formatInputPopulations([plot.parentPath])}>
-                                {formatInputPopulations([plot.parentPath])}
-                              </dd>
-                            </div>
-                            <div className="plot-caption__wide">
-                              <dt>{displayedGateLabel(plot.displayedGateNames)}</dt>
-                              <dd>
-                                {formatDisplayedGates(
-                                  plot.displayedGateNames,
-                                  plot.gateMetadataStatus,
-                                )}
-                              </dd>
-                            </div>
-                            <div>
-                              <dt>Page</dt>
-                              <dd>{plot.pageNumber}</dd>
-                            </div>
-                          </dl>
-                        </figcaption>
-                      </figure>
-                    ))}
-                  </div>
-                </section>
-              ))}
-            </div>
-          ) : (
-            <section className="sample-section">
-              <h2>Samples</h2>
-              <ol
-                className="sample-list"
-                style={
-                  {
-                    "--sample-row-count": Math.max(
-                      1,
-                      Math.min(
-                        SAMPLE_ROWS_PER_COLUMN,
-                        report.sampleNames.length,
-                      ),
-                    ),
-                  } as CSSProperties
-                }
-              >
-                {report.sampleNames.map((sampleName) => (
-                  <li key={sampleName} title={sampleName}>
-                    {sampleName}
-                  </li>
-                ))}
-              </ol>
-            </section>
-          )}
+                      <figcaption>
+                        <dl>
+                          <div className="plot-caption__primary">
+                            <dt>
+                              {visibleGrouping === "sample"
+                                ? "Plot"
+                                : "Sample"}
+                            </dt>
+                            <dd
+                              title={
+                                visibleGrouping === "sample"
+                                  ? plot.groupLabel
+                                  : plot.sampleName
+                              }
+                            >
+                              {visibleGrouping === "sample"
+                                ? plot.groupLabel
+                                : plot.sampleName}
+                            </dd>
+                          </div>
+                          <div className="plot-caption__wide">
+                            <dt>Input population</dt>
+                            <dd
+                              title={formatInputPopulations([plot.parentPath])}
+                            >
+                              {formatInputPopulations([plot.parentPath])}
+                            </dd>
+                          </div>
+                          <div className="plot-caption__wide">
+                            <dt>
+                              {displayedGateLabel(plot.displayedGateNames)}
+                            </dt>
+                            <dd>
+                              {formatDisplayedGates(
+                                plot.displayedGateNames,
+                                plot.gateMetadataStatus,
+                              )}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt>Page</dt>
+                            <dd>{plot.pageNumber}</dd>
+                          </div>
+                        </dl>
+                      </figcaption>
+                    </figure>
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
         </>
       )}
     </main>
